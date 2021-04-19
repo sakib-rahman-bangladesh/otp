@@ -21,6 +21,8 @@
 %%
 -module(ssl_session_SUITE).
 
+-behaviour(ct_suite).
+
 -include("tls_handshake.hrl").
 -include("ssl_record.hrl").
 
@@ -141,8 +143,9 @@ reuse_session() ->
 reuse_session(Config) when is_list(Config) -> 
     ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
     ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
-    
-    ssl_test_lib:reuse_session(ClientOpts, ServerOpts, Config).
+    Version = ssl_test_lib:protocol_version(Config),
+    ssl_test_lib:reuse_session([{versions,[Version]} | ClientOpts], 
+                               [{versions,[Version]} | ServerOpts], Config).
 %%--------------------------------------------------------------------
 reuse_session_expired() ->
     [{doc,"Test sessions is not reused when it has expired"}].
@@ -213,7 +216,7 @@ make_sure_expired(Host, Port, Id) ->
     State = ssl_test_lib:state(Prop),
     ClientCache = element(2, State),
 
-    case ssl_session_cache:lookup(ClientCache, {{Host,  Port}, Id}) of
+    case ssl_client_session_cache_db:lookup(ClientCache, {{Host,  Port}, Id}) of
 	undefined ->
    	   ok; 
 	#session{is_resumable = false} ->

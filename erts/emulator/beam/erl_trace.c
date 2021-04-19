@@ -948,11 +948,10 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
  * or   {trace, Pid, return_to, {Mod, Func, Arity}}
  */
 void 
-erts_trace_return_to(Process *p, BeamInstr *pc)
+erts_trace_return_to(Process *p, ErtsCodePtr pc)
 {
+    const ErtsCodeMFA *cmfa = erts_find_function_from_pc(pc);
     Eterm mfa;
-
-    ErtsCodeMFA *cmfa = erts_find_function_from_pc(pc);
 
     if (!cmfa) {
 	mfa = am_undefined;
@@ -1385,8 +1384,8 @@ trace_gc(Process *p, Eterm what, Uint size, Eterm msg)
 }
 
 void 
-monitor_long_schedule_proc(Process *p, ErtsCodeMFA *in_fp,
-                           ErtsCodeMFA *out_fp, Uint time)
+monitor_long_schedule_proc(Process *p, const ErtsCodeMFA *in_fp,
+                           const ErtsCodeMFA *out_fp, Uint time)
 {
     ErlHeapFragment *bp;
     ErlOffHeap *off_heap;
@@ -1939,7 +1938,7 @@ profile_runnable_proc(Process *p, Eterm status){
     Eterm *hp, msg;
     Eterm where = am_undefined;
     ErlHeapFragment *bp = NULL;
-    ErtsCodeMFA *cmfa = NULL;
+    const ErtsCodeMFA *cmfa = NULL;
 
     ErtsThrPrgrDelayHandle dhndl;
     Uint hsz = 4 + 6 + patch_ts_size(erts_system_profile_ts_type)-1;
@@ -2861,6 +2860,8 @@ is_tracer_enabled(Process* c_p, ErtsProcLocks c_p_locks,
                   ErtsTracerNif **tnif_ret,
                   enum ErtsTracerOpt topt, Eterm tag) {
     Eterm nif_result;
+
+    ASSERT(t_p);
 
 #if defined(ERTS_ENABLE_LOCK_CHECK)
     if (c_p)

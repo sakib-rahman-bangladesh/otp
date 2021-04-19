@@ -83,14 +83,6 @@
 #  endif
 #endif
 
-int ethr_assert_failed(const char *file, int line, const char *func, char *a);
-#ifdef ETHR_DEBUG
-#define ETHR_ASSERT(A) \
-  ((void) ((A) ? 1 : ethr_assert_failed(__FILE__, __LINE__, __func__, #A)))
-#else
-#define ETHR_ASSERT(A) ((void) 1)
-#endif
-
 #if defined(__GNUC__)
 #  define ETHR_PROTO_NORETURN__ void __attribute__((noreturn))
 #  define ETHR_IMPL_NORETURN__ void
@@ -101,6 +93,16 @@ int ethr_assert_failed(const char *file, int line, const char *func, char *a);
 #  define ETHR_PROTO_NORETURN__ void
 #  define ETHR_IMPL_NORETURN__ void
 #endif
+
+ETHR_PROTO_NORETURN__
+ethr_assert_failed(const char *file, int line, const char *func, char *a);
+#ifdef ETHR_DEBUG
+#define ETHR_ASSERT(A) \
+  ((void) ((A) ? 1 : ethr_assert_failed(__FILE__, __LINE__, __func__, #A)))
+#else
+#define ETHR_ASSERT(A) ((void) 1)
+#endif
+
 
 #if defined(ETHR_PTHREADS)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *\
@@ -131,7 +133,7 @@ typedef pthread_key_t ethr_tsd_key;
 
 #define ETHR_HAVE_ETHR_SIG_FUNCS 1
 
-#if defined(PURIFY) || defined(VALGRIND)
+#if defined(VALGRIND)
 #  define ETHR_FORCE_PTHREAD_RWLOCK
 #  define ETHR_FORCE_PTHREAD_MUTEX
 #endif

@@ -22,7 +22,7 @@
 {application, kernel,
  [
   {description, "ERTS  CXC 138 10"},
-  {vsn, "7.1"},
+  {vsn, "7.2"},
   {modules, [application,
 	     application_controller,
 	     application_master,
@@ -34,7 +34,9 @@
 	     erl_boot_server,
 	     erl_compile_server,
 	     erl_distribution,
+             erl_erts_errors,
 	     erl_reply,
+             erl_kernel_errors,
              erl_signal_handler,
 	     erpc,
 	     error_handler,
@@ -48,7 +50,6 @@
 	     group,
 	     group_history,
 	     heart,
-	     hipe_unified_loader,
 	     inet6_tcp,
 	     inet6_tcp_dist,
 	     inet6_udp,
@@ -146,14 +147,13 @@
                 ddll_server,
                 erl_epmd,
                 inet_db,
-                pg,
-                pg2]},
+                pg]},
   {applications, []},
   {env, [{logger_level, notice},
          {logger_sasl_compatible, false},
          {shell_docs_ansi,auto}
         ]},
   {mod, {kernel, []}},
-  {runtime_dependencies, ["erts-11.0", "stdlib-3.13", "sasl-3.0"]}
+  {runtime_dependencies, ["erts-@OTP-16718@", "stdlib-3.13", "sasl-3.0"]}
  ]
 }.

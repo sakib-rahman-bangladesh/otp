@@ -1414,7 +1414,9 @@ test_raise_4(Expr) ->
     try
         do_test_raise_4(Expr)
     catch
-        exit:{exception,C,E,Stk}:Stk ->
+        exit:{exception,C,E,StkTerm}:Stk ->
+            %% it's not allowed to do the matching directly in the clause head
+            true = (Stk =:= StkTerm),
             try
                 Expr()
             catch
@@ -1527,6 +1529,7 @@ expr_export_5() ->
 coverage(_Config) ->
     {'EXIT',{{badfun,true},[_|_]}} = (catch coverage_1()),
     ok = coverage_ssa_throw(),
+    error = coverage_pre_codegen(),
     ok.
 
 %% Cover some code in beam_trim.
@@ -1616,5 +1619,16 @@ cst_raw() ->
     end.
 
 cst_raw_1() -> throw(id(gurka)).
+
+%% Cover some code in beam_ssa_pre_codegen.
+coverage_pre_codegen() ->
+    try not (catch 22) of
+        true ->
+            ok
+    catch
+        _:_ ->
+            error
+    end.
+
 
 id(I) -> I.

@@ -35,7 +35,7 @@
 
 -export([seq/3, seq_r/3]).
 -export([loaded/1, a_function/1, a_called_function/1, dec/1, nif_dec/1, dead_tracer/1,
-        return_stop/1]).
+        return_stop/1,catch_crash/1]).
 
 -define(US_ERROR, 10000).
 -define(R_ERROR, 0.8).
@@ -63,8 +63,9 @@
 
 %% When run in test server.
 -export([all/0, suite/0,
-	 init_per_testcase/2, end_per_testcase/2, not_run/1]).
+	 init_per_testcase/2, end_per_testcase/2]).
 -export([basic/1, on_and_off/1, info/1,
+         apply_bif_bug/1, abb_worker/1,
          disable_ongoing/1,
 	 pause_and_restart/1, scheduling/1, called_function/1, combo/1, 
 	 bif/1, nif/1]).
@@ -85,17 +86,12 @@ suite() ->
     [{ct_hooks,[ts_install_cth]},
      {timetrap, {minutes, 10}}].
 
-all() -> 
-    case test_server:is_native(trace_call_time_SUITE) of
-	true -> [not_run];
-	false ->
-	    [basic, on_and_off, info, pause_and_restart, scheduling,
-             disable_ongoing,
-	     combo, bif, nif, called_function, dead_tracer, return_stop]
-    end.
-
-not_run(Config) when is_list(Config) ->
-    {skipped,"Native code"}.
+all() ->
+    [basic, on_and_off, info, pause_and_restart, scheduling,
+     disable_ongoing,
+     apply_bif_bug,
+     combo, bif, nif, called_function, dead_tracer, return_stop,
+     catch_crash].
 
 %% Tests basic call time trace
 basic(Config) when is_list(Config) ->
@@ -637,6 +633,25 @@ spinner(N) ->
 quicky() ->
     done.
 
+%% OTP-16994: next_catch returned a bogus stack pointer when call_time tracing
+%% was enabled, crashing the emulator.
+catch_crash(_Config) ->
+    Fun = id(fun() -> catch_crash_1() end),
+
+    _ = erlang:trace_pattern({?MODULE,'_','_'}, true, [call_time]),
+    _ = erlang:trace(self(), true, [call]),
+
+    Res = (catch Fun()),
+
+    _ = erlang:trace_pattern({'_','_','_'}, false, [call_time]),
+    _ = erlang:trace(self(), false, [call]),
+
+    id(Res),
+
+    ok.
+
+catch_crash_1() ->
+    error(crash).
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -811,3 +826,26 @@ loop() ->
             Pid ! {self(), answer, erlang:apply(M, F, A)},
             loop()
     end.
+
+%% OTP-17290, GH-4635
+apply_bif_bug(_Config) ->
+    Pid = spawn(?MODULE, abb_worker, [self()]),
+    erlang:trace(Pid, true, [call]),
+    erlang:trace_pattern({?MODULE,abb_foo,'_'}, true, [call_time]),
+    erlang:trace_pattern({erlang,display,1}, true, [call_time]),
+    Pid ! {call, erlang, display, ["Hej"]},
+    receive
+        done -> ok
+    end,
+    erlang:trace_pattern({'_','_','_'}, false, [call_time]).
+
+abb_worker(Papa) ->
+    receive
+        {call, M, F, Args} ->
+            abb_foo(M, F, Args),
+            Papa ! done
+    end.
+
+
+abb_foo(M,F,Args) ->
+    apply(M,F,Args).

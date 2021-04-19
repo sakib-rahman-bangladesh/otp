@@ -364,19 +364,10 @@ dnl
 dnl Try to find perl version 5. If found set PERL to the absolute path
 dnl of the program, if not found set PERL to false.
 dnl
-dnl On some systems /usr/bin/perl is perl 4 and e.g.
-dnl /usr/local/bin/perl is perl 5. We try to handle this case by
-dnl putting a couple of 
-dnl Tries to handle the case that there are two programs called perl
-dnl in the path and one of them is perl 5 and the other isn't. 
-dnl
 AC_DEFUN(LM_PROG_PERL5,
 [AC_PATH_PROGS(PERL, perl5 perl, false,
    /usr/local/bin:/opt/local/bin:/usr/local/gnu/bin:${PATH})
-changequote(, )dnl
-dnl[ That bracket is needed to balance the right bracket below
-if test "$PERL" = "false" || $PERL -e 'exit ($] >= 5)'; then
-changequote([, ])dnl
+if test "$PERL" = "false"; then
   ac_cv_path_PERL=false
   PERL=false
 dnl  AC_MSG_WARN(perl version 5 not found)
@@ -473,28 +464,6 @@ case ${ac_cv_struct_sockaddr_sa_len} in
   *) ;;
 esac
 ])
-
-dnl ----------------------------------------------------------------------
-dnl
-dnl LM_STRUCT_EXCEPTION
-dnl
-dnl Check to see whether the system supports the matherr function
-dnl and its associated type "struct exception".
-dnl
-
-AC_DEFUN(LM_STRUCT_EXCEPTION,
-[AC_CACHE_CHECK([for struct exception (and matherr function)],
- ac_cv_struct_exception,
-AC_TRY_COMPILE([#include <math.h>],
-  [struct exception x; x.type = DOMAIN; x.type = SING;],
-  ac_cv_struct_exception=yes, ac_cv_struct_exception=no))
-
-case "${ac_cv_struct_exception}" in
-  "yes" ) AC_DEFINE(USE_MATHERR,[1],[Define if you have matherr() function and struct exception type]) ;;
-  *  ) ;;
-esac
-])
-
 
 dnl ----------------------------------------------------------------------
 dnl
@@ -1374,28 +1343,55 @@ AC_DEFUN(ETHR_CHK_GCC_ATOMIC_OPS,
     ETHR_CHK_GCC_ATOMIC_OP__(__atomic_compare_exchange_n)
 
     ethr_have_gcc_native_atomics=no
-    ethr_arm_dbm_instr_val=0
+    ethr_arm_dbm_sy_instr_val=0
+    ethr_arm_dbm_st_instr_val=0
+    ethr_arm_dbm_ld_instr_val=0
     case "$GCC-$host_cpu" in
-	yes-arm*)
-	    AC_CACHE_CHECK([for ARM DMB instruction], ethr_cv_arm_dbm_instr,
+	yes-arm*|yes-aarch*)
+	    AC_CACHE_CHECK([for ARM 'dmb sy' instruction], ethr_cv_arm_dbm_sy_instr,
 			   [
-				ethr_cv_arm_dbm_instr=no
+				ethr_cv_arm_dbm_sy_instr=no
 				AC_TRY_LINK([],
 					    [
 						__asm__ __volatile__("dmb sy" : : : "memory");
-						__asm__ __volatile__("dmb st" : : : "memory");
 					    ],
-					    [ethr_cv_arm_dbm_instr=yes])
+					    [ethr_cv_arm_dbm_sy_instr=yes])
 			   ])
-	    if test $ethr_cv_arm_dbm_instr = yes; then
-		ethr_arm_dbm_instr_val=1
+	    if test $ethr_cv_arm_dbm_sy_instr = yes; then
+		ethr_arm_dbm_sy_instr_val=1
 		test $ethr_cv_64bit___atomic_compare_exchange_n = yes &&
 		    ethr_have_gcc_native_atomics=yes
+	    fi
+	    AC_CACHE_CHECK([for ARM 'dmb st' instruction], ethr_cv_arm_dbm_st_instr,
+			   [
+				ethr_cv_arm_dbm_st_instr=no
+				AC_TRY_LINK([],
+					    [
+						__asm__ __volatile__("dmb st" : : : "memory");
+					    ],
+					    [ethr_cv_arm_dbm_st_instr=yes])
+			   ])
+	    if test $ethr_cv_arm_dbm_st_instr = yes; then
+		ethr_arm_dbm_st_instr_val=1
+	    fi
+	    AC_CACHE_CHECK([for ARM 'dmb ld' instruction], ethr_cv_arm_dbm_ld_instr,
+			   [
+				ethr_cv_arm_dbm_ld_instr=no
+				AC_TRY_LINK([],
+					    [
+						__asm__ __volatile__("dmb ld" : : : "memory");
+					    ],
+					    [ethr_cv_arm_dbm_ld_instr=yes])
+			   ])
+	    if test $ethr_cv_arm_dbm_ld_instr = yes; then
+		ethr_arm_dbm_ld_instr_val=1
 	    fi;;
 	*)
 	    ;;
     esac
-    AC_DEFINE_UNQUOTED([ETHR_HAVE_GCC_ASM_ARM_DMB_INSTRUCTION], [$ethr_arm_dbm_instr_val], [Define as a boolean indicating whether you have a gcc compatible compiler capable of generating the ARM DMB instruction, and are compiling for an ARM processor with ARM DMB instruction support, or not])
+    AC_DEFINE_UNQUOTED([ETHR_HAVE_GCC_ASM_ARM_DMB_INSTRUCTION], [$ethr_arm_dbm_sy_instr_val], [Define as a boolean indicating whether you have a gcc compatible compiler capable of generating the ARM 'dmb sy' instruction, and are compiling for an ARM processor with ARM DMB instruction support, or not])
+    AC_DEFINE_UNQUOTED([ETHR_HAVE_GCC_ASM_ARM_DMB_ST_INSTRUCTION], [$ethr_arm_dbm_st_instr_val], [Define as a boolean indicating whether you have a gcc compatible compiler capable of generating the ARM 'dmb st' instruction, and are compiling for an ARM processor with ARM DMB instruction support, or not])
+    AC_DEFINE_UNQUOTED([ETHR_HAVE_GCC_ASM_ARM_DMB_LD_INSTRUCTION], [$ethr_arm_dbm_ld_instr_val], [Define as a boolean indicating whether you have a gcc compatible compiler capable of generating the ARM 'dmb ld' instruction, and are compiling for an ARM processor with ARM DMB instruction support, or not])
     test $ethr_cv_32bit___sync_val_compare_and_swap = yes &&
     	ethr_have_gcc_native_atomics=yes
     test $ethr_cv_64bit___sync_val_compare_and_swap = yes &&
@@ -1511,6 +1507,33 @@ AC_ARG_WITH(libatomic_ops,
 AC_ARG_WITH(with_sparc_memory_order,
 	    AS_HELP_STRING([--with-sparc-memory-order=TSO|PSO|RMO],
 			   [specify sparc memory order (defaults to RMO)]))
+
+AC_ARG_ENABLE(ppc-lwsync-instruction,
+AS_HELP_STRING([--enable-ppc-lwsync-instruction], [enable use of powerpc lwsync instruction])
+AS_HELP_STRING([--disable-ppc-lwsync-instruction], [disable use of powerpc lwsync instruction]),
+[ case "$enableval" in
+    no) enable_lwsync=no ;;
+    *)  enable_lwsync=yes ;;
+  esac ],
+[
+  AC_CHECK_SIZEOF(void *)
+  case $host_cpu-$ac_cv_sizeof_void_p in
+       macppc-8|powerpc-8|ppc-8|powerpc64-8|ppc64-8|powerpc64le-8|ppc64le-8|"Power Macintosh"-8)
+           enable_lwsync=yes;;
+       *)
+           enable_lwsync=undefined;;
+  esac ])
+
+case $enable_lwsync in
+     no)
+       AC_DEFINE(ETHR_PPC_HAVE_NO_LWSYNC, [1], [Define if you do not have the powerpc lwsync instruction])
+       ;;
+     yes)
+       AC_DEFINE(ETHR_PPC_HAVE_LWSYNC, [1], [Define if you have the powerpc lwsync instruction])
+       ;;
+     *)
+       ;;
+esac
 
 LM_CHECK_THR_LIB
 ERL_INTERNAL_LIBS
@@ -2845,6 +2868,8 @@ AC_DEFUN([LM_HARDWARE_ARCH], [
     ppc)	ARCH=ppc;;
     ppc64)	ARCH=ppc64;;
     ppc64le)	ARCH=ppc64le;;
+    powerpc64)	ARCH=ppc64;;
+    powerpc64le) ARCH=ppc64le;;
     "Power Macintosh")	ARCH=ppc;;
     arm64)	ARCH=arm64;;
     armv5b)	ARCH=arm;;
@@ -2855,6 +2880,9 @@ AC_DEFUN([LM_HARDWARE_ARCH], [
     armv6hl)	ARCH=arm;;
     armv7l)	ARCH=arm;;
     armv7hl)	ARCH=arm;;
+    armv8*)	ARCH=arm;;
+    aarch64)	ARCH=arm64;;
+    aarch*)	ARCH=arm;;
     tile)	ARCH=tile;;
     e2k)        ARCH=e2k;;
     *)	 	ARCH=noarch;;
@@ -2892,8 +2920,8 @@ AC_DEFUN([LM_HARDWARE_ARCH], [
 	ARCH=ppc64
 	;;
     arm-8)
-	AC_MSG_RESULT(yes: adjusting ARCH=arm to ARCH=noarch)
-	ARCH=noarch
+	AC_MSG_RESULT(yes: adjusting ARCH=arm to ARCH=arm64)
+	ARCH=arm64
 	;;
     *)
 	AC_MSG_RESULT(no: ARCH is $ARCH)

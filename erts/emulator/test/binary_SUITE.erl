@@ -377,12 +377,12 @@ t_split_binary(Config) when is_list(Config) ->
 
     %% Sub binary of heap binary.
     split(L, make_sub_binary(B), size(B)),
-    {X,_Y} = split_binary(B, size(B) div 2),
+    {X,Y} = split_binary(B, size(B) div 2),
     split(binary_to_list(X), X, size(X)),
 
     %% Unaligned sub binary of heap binary.
     split(L, make_unaligned_sub_binary(B), size(B)),
-    {X,_Y} = split_binary(B, size(B) div 2),
+    {X,Y} = split_binary(B, size(B) div 2),
     split(binary_to_list(X), X, size(X)),
     
     %% Reference-counted binary.
@@ -392,12 +392,12 @@ t_split_binary(Config) when is_list(Config) ->
 
     %% Sub binary of reference-counted binary.
     split(L2, make_sub_binary(B2), size(B2)),
-    {X2,_Y2} = split_binary(B2, size(B2) div 2),
+    {X2,Y2} = split_binary(B2, size(B2) div 2),
     split(binary_to_list(X2), X2, size(X2)),
 
     %% Unaligned sub binary of reference-counted binary.
     split(L2, make_unaligned_sub_binary(B2), size(B2)),
-    {X2,_Y2} = split_binary(B2, size(B2) div 2),
+    {X2,Y2} = split_binary(B2, size(B2) div 2),
     split(binary_to_list(X2), X2, size(X2)),
 
     ok.
@@ -960,32 +960,7 @@ bad_terms(Config) when is_list(Config) ->
     {'EXIT',{badarg,_}} = (catch binary_to_term(<<131,$M,-1:32,1,11,22,33>>)),
     ok.
 
-
-corrupter(Term) when is_function(Term);
-		     is_function(hd(Term));
-		     is_function(element(2,element(2,element(2,Term)))) ->
-    %% Check if lists is native compiled. If it is, we do not try to
-    %% corrupt funs as this can create some very strange behaviour.
-    %% To show the error print `Byte` in the foreach fun in corrupter/2.
-    case erlang:system_info(hipe_architecture) of
-	undefined ->
-	    corrupter0(Term);
-	Architecture ->
-	    {lists, ListsBinary, _ListsFilename} = code:get_object_code(lists),
-	    ChunkName = hipe_unified_loader:chunk_name(Architecture),
-	    NativeChunk = beam_lib:chunks(ListsBinary, [ChunkName]),
-	    case NativeChunk of
-		{ok,{_,[{_,Bin}]}} when is_binary(Bin) ->
-		    S = io_lib:format("Skipping corruption of: ~P", [Term,12]),
-		    io:put_chars(S);
-		{error, beam_lib, _} ->
-		    corrupter0(Term)
-	    end
-    end;
 corrupter(Term) ->
-    corrupter0(Term).
-
-corrupter0(Term) ->
     try
 	      S = io_lib:format("About to corrupt: ~P", [Term,12]),
 	      io:put_chars(S)

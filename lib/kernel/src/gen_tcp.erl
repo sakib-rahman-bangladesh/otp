@@ -88,7 +88,6 @@
         nodelay |
         packet |
         packet_size |
-        pktoptions |
         priority |
         {raw,
          Protocol :: non_neg_integer(),
@@ -296,7 +295,8 @@ close(S) ->
 -spec send(Socket, Packet) -> ok | {error, Reason} when
       Socket :: socket(),
       Packet :: iodata(),
-      Reason :: closed | inet:posix().
+      Reason :: closed | {timeout, RestData} | inet:posix(),
+      RestData :: binary().
 
 send({'$inet', GenTcpMod, _} = S, Packet) when is_atom(GenTcpMod) ->
     GenTcpMod:?FUNCTION_NAME(S, Packet);

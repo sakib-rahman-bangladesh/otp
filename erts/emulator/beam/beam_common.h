@@ -212,20 +212,20 @@ do {						\
         DTRACE2(nif_return, process_name, mfa_buf);                     \
     }
 
-#define DTRACE_GLOBAL_CALL_FROM_EXPORT(p,e)                                                    \
-    do {                                                                                       \
-        if (DTRACE_ENABLED(global_function_entry)) {                                           \
-            BeamInstr* fp = (BeamInstr *) (((Export *) (e))->addressv[erts_active_code_ix()]); \
-            DTRACE_GLOBAL_CALL((p), erts_code_to_codemfa(fp));          \
-        }                                                                                      \
+#define DTRACE_GLOBAL_CALL_FROM_EXPORT(p,e)                                        \
+    do {                                                                           \
+        if (DTRACE_ENABLED(global_function_entry)) {                               \
+            ErtsCodePtr fp__ = (((Export *) (e))->addresses[erts_active_code_ix()]); \
+            DTRACE_GLOBAL_CALL((p), erts_code_to_codemfa(fp__));                   \
+        }                                                                          \
     } while(0)
 
-#define DTRACE_RETURN_FROM_PC(p, i)                                                        \
-    do {                                                                                \
-        ErtsCodeMFA* cmfa;                                                                  \
+#define DTRACE_RETURN_FROM_PC(p, i)                                                      \
+    do {                                                                                 \
+        const ErtsCodeMFA* cmfa;                                                         \
         if (DTRACE_ENABLED(function_return) && (cmfa = erts_find_function_from_pc(i))) { \
-            DTRACE_RETURN((p), cmfa);                               \
-        }                                                                               \
+            DTRACE_RETURN((p), cmfa);                                                    \
+        }                                                                                \
     } while(0)
 
 #else /* USE_VM_PROBES */
@@ -248,30 +248,29 @@ do {						\
 #define REDS_IN(p)  ((p)->def_arg_reg[5])
 
 ErtsCodeMFA *ubif2mfa(void* uf);
-BeamInstr* handle_error(Process* c_p, BeamInstr* pc,
-                        Eterm* reg, ErtsCodeMFA* bif_mfa);
-BeamInstr* call_error_handler(Process* p, BeamInstr* I,
-                              Eterm* reg, Eterm func);
-BeamInstr* fixed_apply(Process* p, Eterm* reg, Uint arity,
-			BeamInstr *I, Uint offs);
-BeamInstr* apply(Process* p, Eterm* reg,
-                        BeamInstr *I, Uint offs);
-BeamInstr* call_fun(Process* p, int arity,
-			   Eterm* reg, Eterm args);
-BeamInstr* apply_fun(Process* p, Eterm fun,
-			    Eterm args, Eterm* reg);
+ErtsCodePtr handle_error(Process* c_p, ErtsCodePtr pc,
+                         Eterm* reg, const ErtsCodeMFA* bif_mfa);
+Export* call_error_handler(Process* p, const ErtsCodeMFA* mfa,
+                           Eterm* reg, Eterm func);
+Export* fixed_apply(Process* p, Eterm* reg, Uint arity,
+                    ErtsCodePtr I, Uint offs);
+Export* apply(Process* p, Eterm* reg, ErtsCodePtr I, Uint offs);
+ErtsCodePtr call_fun(Process* p, int arity, Eterm* reg,
+                     Eterm args, Export **epp);
+ErtsCodePtr apply_fun(Process* p, Eterm fun, Eterm args,
+                      Eterm* reg, Export **epp);
 Eterm new_fun(Process* p, Eterm* reg,
 		     ErlFunEntry* fe, int num_free);
 ErlFunThing* new_fun_thing(Process* p, ErlFunEntry* fe, int num_free);
 int is_function2(Eterm Term, Uint arity);
 Eterm erts_gc_new_map(Process* p, Eterm* reg, Uint live,
-                             Uint n, BeamInstr* ptr);
+                      Uint n, const Eterm* data);
 Eterm erts_gc_new_small_map_lit(Process* p, Eterm* reg, Eterm keys_literal,
-                               Uint live, BeamInstr* ptr);
+                                Uint live, const Eterm* data);
 Eterm erts_gc_update_map_assoc(Process* p, Eterm* reg, Uint live,
-                              Uint n, BeamInstr* new_p);
+                               Uint n, const Eterm* data);
 Eterm erts_gc_update_map_exact(Process* p, Eterm* reg, Uint live,
-                              Uint n, Eterm* new_p);
+                               Uint n, const Eterm* data);
 Eterm get_map_element(Eterm map, Eterm key);
 Eterm get_map_element_hash(Eterm map, Eterm key, Uint32 hx);
 int raw_raise(Eterm stacktrace, Eterm exc_class, Eterm value, Process *c_p);
@@ -279,31 +278,20 @@ void erts_sanitize_freason(Process* c_p, Eterm exc);
 Eterm add_stacktrace(Process* c_p, Eterm Value, Eterm exc);
 void copy_out_registers(Process *c_p, Eterm *reg);
 void copy_in_registers(Process *c_p, Eterm *reg);
-void check_monitor_long_schedule(Process *c_p, Uint64 start_time, BeamInstr* start_time_i);
+void check_monitor_long_schedule(Process *c_p, Uint64 start_time,
+                                 ErtsCodePtr start_time_i);
 
 
-#define BeamCodeApply() beam_apply
-
-#ifdef BEAMASM
-#define BeamCodeNormalExit() beam_normal_exit
-extern BeamInstr *beam_apply;
-extern BeamInstr *beam_normal_exit;
-extern BeamInstr *beam_exit;
-extern BeamInstr *beam_save_calls;
-extern BeamInstr *beam_continue_exit;
-extern BeamInstr *beam_return_to_trace;   /* OpCode(i_return_to_trace) */
-extern BeamInstr *beam_return_trace;      /* OpCode(i_return_trace) */
-extern BeamInstr *beam_exception_trace;   /* OpCode(i_exception_trace) */
-extern BeamInstr *beam_return_time_trace; /* OpCode(i_return_time_trace) */
-#else
-#define BeamCodeNormalExit() (beam_apply + 1)
-extern BeamInstr beam_apply[2];
-extern BeamInstr beam_exit[1];
-extern BeamInstr beam_continue_exit[1];
-extern BeamInstr beam_return_to_trace[1];   /* OpCode(i_return_to_trace) */
-extern BeamInstr beam_return_trace[1];      /* OpCode(i_return_trace) */
-extern BeamInstr beam_exception_trace[1];   /* OpCode(i_exception_trace) */
-extern BeamInstr beam_return_time_trace[1]; /* OpCode(i_return_time_trace) */
-#endif
+extern ErtsCodePtr beam_apply;
+extern ErtsCodePtr beam_normal_exit;
+extern ErtsCodePtr beam_exit;
+extern ErtsCodePtr beam_save_calls;
+extern ErtsCodePtr beam_bif_export_trap;
+extern ErtsCodePtr beam_export_trampoline;
+extern ErtsCodePtr beam_continue_exit;
+extern ErtsCodePtr beam_return_to_trace;   /* OpCode(i_return_to_trace) */
+extern ErtsCodePtr beam_return_trace;      /* OpCode(i_return_trace) */
+extern ErtsCodePtr beam_exception_trace;   /* OpCode(i_exception_trace) */
+extern ErtsCodePtr beam_return_time_trace; /* OpCode(i_return_time_trace) */
 
 #endif /* _BEAM_COMMON_H_ */

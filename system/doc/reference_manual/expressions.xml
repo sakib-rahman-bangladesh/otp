@@ -92,9 +92,9 @@ _Height</pre>
     <pre>
 [H|_] = [1,2,3]</pre>
     <p>Variables starting with underscore (_), for example,
-      <c>_Height</c>, are normal variables, not anonymous. They are
-      however ignored by the compiler in the sense that they do not
-      generate any warnings for unused variables.</p>
+      <c>_Height</c>, are normal variables, not anonymous. However,
+      they are ignored by the compiler in the sense that they do not
+      generate warnings.</p>
       <p><em>Example:</em></p>
       <p>The following code:</p>
     <pre>
@@ -402,12 +402,15 @@ Expr1 ! Expr2</pre>
     <p>Sends the value of <c>Expr2</c> as a message to the process
       specified by <c>Expr1</c>. The value of <c>Expr2</c> is also
       the return value of the expression.</p>
-    <p><c>Expr1</c> must evaluate to a pid, a registered name (atom), or
+    <p><c>Expr1</c> must evaluate to a pid, an alias (reference),
+      a port, a registered name (atom), or
       a tuple <c>{Name,Node}</c>. <c>Name</c> is an atom and
       <c>Node</c> is a node name, also an atom.</p>
     <list type="bulleted">
       <item>If <c>Expr1</c> evaluates to a name, but this name is not
        registered, a <c>badarg</c> run-time error occurs.</item>
+      <item>Sending a message to a reference never fails, even if the
+       reference is no longer (or never was) an alias.</item>
       <item>Sending a message to a pid never fails, even if the pid
        identifies a non-existing process.</item>
       <item>Distributed message sending, that is, if <c>Expr1</c>
@@ -828,10 +831,6 @@ Expr1 -- Expr2</pre>
 2> <input>[1,2,3,2,1,2]--[2,1,2].</input>
 [3,1,2]</pre>
 
-     <warning><p>The complexity of <c>A -- B</c> is
-     proportional to <c>length(A)*length(B)</c>. That is, it
-     becomes very slow if both <c>A</c> and <c>B</c> are
-     long lists.</p></warning>
    </section>
 
   <section>
@@ -1181,7 +1180,7 @@ Ei = Value |
     <p>The value of <c>Size</c> multiplied with the unit gives
       the number of bits. A segment of type <c>binary</c> must have 
       a size that is evenly divisible by 8. For a segment of type <c>float</c>
-      the size must be either 64 or 32.</p>
+      the size must be either 64, 32, or 16.</p>
 
     <note><p>When constructing binaries, if the size <c>N</c> of an integer
     segment is too small to contain the given integer, the most significant
@@ -1348,14 +1347,6 @@ catch Expr</code>
 3
 2> <input>catch 1+a.</input>
 {'EXIT',{badarith,[...]}}</pre>
-    <p>Notice that <c>catch</c> has low precedence and catch
-      subexpressions often needs to be enclosed in a block
-      expression or in parentheses:</p>
-    <pre>
-3> <input>A = catch 1+2.</input>
-** 1: syntax error before: 'catch' **
-4> <input>A = (catch 1+2).</input>
-3</pre>
     <p>The BIF <c>throw(Any)</c> can be used for non-local return from
       a function. It must be evaluated within a <c>catch</c>, which
       returns the value <c>Any</c>.</p>

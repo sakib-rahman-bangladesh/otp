@@ -80,6 +80,7 @@
 	 hostkey_fingerprint_check_sha512/1,
 	 hostkey_fingerprint_check_list/1,
          save_accepted_host_option/1,
+         raw_option/1,
          config_file/1,
          config_file_modify_algorithms_order/1
 	]).
@@ -139,6 +140,7 @@ all() ->
      id_string_own_string_server_trail_space,
      id_string_random_server,
      save_accepted_host_option,
+     raw_option,
      config_file,
      config_file_modify_algorithms_order,
      {group, hardening_tests}
@@ -1444,15 +1446,15 @@ try_to_connect(Connect, Host, Port, Pid, Tref, N) ->
 
 %%--------------------------------------------------------------------
 max_sessions_drops_tcp_connects() ->
-    [{timetrap,{minutes,5}}].
+    [{timetrap,{minutes,20}}].
 
 max_sessions_drops_tcp_connects(Config) ->
     MaxSessions = 20,
     UseSessions = 2, % Must be =< MaxSessions
     FloodSessions = 1000,
     ParallelLogin = true,
-    NegTimeOut = 10*1000,
-    HelloTimeOut = 1*1000,
+    NegTimeOut = 8*1000,
+    HelloTimeOut = 200,
 
     %% Start a test daemon
     SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
@@ -1468,8 +1470,8 @@ max_sessions_drops_tcp_connects(Config) ->
                              {max_sessions, MaxSessions}
                             ]),
     Host = ssh_test_lib:mangle_connect_address(Host0),
-    ct:pal("~p Listen ~p:~p for max ~p sessions. Mangled Host = ~p",
-           [Pid,Host0,Port,MaxSessions,Host]),
+    ct:log("~p:~p ~p Listen ~p:~p for max ~p sessions. Mangled Host = ~p",
+           [?MODULE,?LINE,Pid,Host0,Port,MaxSessions,Host]),
     
     %% Log in UseSessions connections
     SSHconnect = fun(N) ->
@@ -1480,7 +1482,7 @@ max_sessions_drops_tcp_connects(Config) ->
                                           {user, "carni"},
                                           {password, "meat"}
                                          ]),
-                         ct:pal("~p: ssh:connect -> ~p", [N,R]),
+                         ct:log("~p:~p ~p: ssh:connect -> ~p", [?MODULE,?LINE,N,R]),
                          R
                  end,
 
@@ -1489,18 +1491,18 @@ max_sessions_drops_tcp_connects(Config) ->
         UseSessions ->
             %% As expected
             %% Try gen_tcp:connect
-            [ct:pal("~p: gen_tcp:connect -> ~p", 
-                    [N, gen_tcp:connect(Host, Port, [])])
+            [ct:log("~p:~p ~p: gen_tcp:connect -> ~p", 
+                    [?MODULE,?LINE, N, gen_tcp:connect(Host, Port, [])])
              || N <- lists:seq(UseSessions+1, MaxSessions)
             ],
 
-            ct:pal("Now try ~p gen_tcp:connect to be rejected", [FloodSessions]),
-            [ct:pal("~p: gen_tcp:connect -> ~p", 
-                    [N, gen_tcp:connect(Host, Port, [])])
+            ct:log("~p:~p Now try ~p gen_tcp:connect to be rejected", [?MODULE,?LINE,FloodSessions]),
+            [ct:log("~p:~p ~p: gen_tcp:connect -> ~p", 
+                    [?MODULE,?LINE, N, gen_tcp:connect(Host, Port, [])])
              || N <- lists:seq(MaxSessions+1, MaxSessions+1+FloodSessions)
             ],
             
-            ct:pal("try ~p ssh:connect", [MaxSessions - UseSessions]),
+            ct:log("~p:~p try ~p ssh:connect", [?MODULE,?LINE, MaxSessions - UseSessions]),
             try_ssh_connect(MaxSessions - UseSessions, NegTimeOut, SSHconnect);
 
         Len1 ->
@@ -1553,6 +1555,12 @@ save_accepted_host_option(Config) ->
     ssh:stop_daemon(Pid).
 
 %%--------------------------------------------------------------------
+raw_option(_Config) ->
+    Opts = [{raw,1,2,3,4}],
+    #{socket_options := Opts} = ssh_options:handle_options(client, Opts),
+    #{socket_options := Opts} = ssh_options:handle_options(server, Opts).
+
+%%--------------------------------------------------------------------
 config_file(Config) ->
     %% First find common algs:
     ServerAlgs = ssh_test_lib:default_algorithms(sshd),
@@ -1560,6 +1568,18 @@ config_file(Config) ->
     CommonAlgs = ssh_test_lib:intersection(ServerAlgs, OurAlgs),
     ct:log("ServerAlgs =~n~p~n~nOurAlgs =~n~p~n~nCommonAlgs =~n~p",[ServerAlgs,OurAlgs,CommonAlgs]),   
     Nkex = length(proplists:get_value(kex, CommonAlgs, [])),
+
+    %% Adjust for very old ssh daemons that only supports ssh-rsa and ssh-dss:
+    AdjustClient =
+        case proplists:get_value(public_key,ServerAlgs,[]) -- ['ssh-rsa','ssh-dss'] of
+            [] ->
+                %% Old, let the client support them also:
+                ct:log("Adjust the client's public_key set", []),
+                [{public_key, ['ssh-rsa','ssh-dss']}];
+            [_|_] ->
+                %% Ok, let the client be un-modified:
+                []
+        end,
 
     case {ServerAlgs, ssh_test_lib:some_empty(CommonAlgs)} of
         {[],_} ->
@@ -1578,7 +1598,7 @@ config_file(Config) ->
                 [{ssh, [{preferred_algorithms,
                          [{cipher, [Ch1]},
                           {kex,    [K1a]}
-                         ]},
+                         ] ++ AdjustClient},
                         {client_options,
                          [{modify_algorithms,
                            [{rm,     [{kex, [K1a]}]},

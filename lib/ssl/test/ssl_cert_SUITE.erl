@@ -21,6 +21,8 @@
 %%
 -module(ssl_cert_SUITE).
 
+-behaviour(ct_suite).
+
 -include_lib("common_test/include/ct.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
@@ -54,6 +56,8 @@
          client_auth_partial_chain_fun_fail/1,
          client_auth_sni/0,
          client_auth_sni/1,
+         client_auth_seelfsigned_peer/0,
+         client_auth_seelfsigned_peer/1,
          missing_root_cert_no_auth/0,
          missing_root_cert_no_auth/1,
          missing_root_cert_auth/0,
@@ -94,6 +98,8 @@
          unsupported_sign_algo_cert_client_auth/1,
          longer_chain/0,
          longer_chain/1,
+         duplicate_chain/0,
+         duplicate_chain/1,
          key_auth_ext_sign_only/0,
          key_auth_ext_sign_only/1,
          hello_retry_request/0,
@@ -199,6 +205,7 @@ all_version_tests() ->
      client_auth_do_not_allow_partial_chain,
      client_auth_partial_chain_fun_fail,
      client_auth_sni,
+     client_auth_seelfsigned_peer,
      missing_root_cert_no_auth,
      missing_root_cert_auth,
      missing_root_cert_auth_user_verify_fun_accept,
@@ -382,6 +389,11 @@ client_auth_sni() ->
    ssl_cert_tests:client_auth_sni().
 client_auth_sni(Config) when is_list(Config) ->
     ssl_cert_tests:client_auth_sni(Config).
+%%--------------------------------------------------------------------
+client_auth_seelfsigned_peer() ->
+   ssl_cert_tests:client_auth_seelfsigned_peer().
+client_auth_seelfsigned_peer(Config) when is_list(Config) ->
+    ssl_cert_tests:client_auth_seelfsigned_peer(Config).
 
 %%--------------------------------------------------------------------
 missing_root_cert_no_auth() ->
@@ -859,6 +871,62 @@ longer_chain(Config) when is_list(Config) ->
                                            {cacerts,  ServerCas ++ ClientCas} | 
                                            proplists:delete(cacerts, ClientOpts0)], Config),
     ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config).
+
+duplicate_chain() ->
+    [{doc, "Manual test of chain with duplicate entries"}].
+duplicate_chain(Config)
+  when is_list(Config) ->
+    Key1 = ssl_test_lib:hardcode_rsa_key(1),
+    Key2 = ssl_test_lib:hardcode_rsa_key(2),
+    Key3 = ssl_test_lib:hardcode_rsa_key(3),
+    Key4 = ssl_test_lib:hardcode_rsa_key(4),
+    Key5 = ssl_test_lib:hardcode_rsa_key(5),
+
+    #{server_config := ServerOpts0, client_config := ClientOpts0} =
+        public_key:pkix_test_data(#{server_chain => #{root => [{key, Key1}],
+                                                      peer => [{key, Key5}]},
+                                    client_chain => #{root => [{key, Key3}],
+                                                      intermediates => [[{key, Key2}], [{key, Key3}]],
+                                                      peer => [{key, Key1}]}}),
+
+    #{client_config := ClientOptsNew} =
+        public_key:pkix_test_data(#{server_chain => #{root => [{key, Key1}],
+                                                      peer => [{key, Key5}]},
+                                    client_chain => #{root => [{key, Key4}],
+                                                      intermediates => [[{key, Key2}], [{key, Key1}]],
+                                                      peer => [{key, Key1}]}}),
+
+    ServerCas0 = proplists:get_value(cacerts, ServerOpts0),
+    ClientCas0 = proplists:get_value(cacerts, ClientOpts0),
+
+    {[Peer,CI1,CI2,CROld], CROld} = chain_and_root(ClientOpts0),
+    {[_Peer,CI1New,CI2New,CRNew], CRNew} = chain_and_root(ClientOptsNew),
+
+    ServerCas = [CRNew|ServerCas0 -- [CROld]],
+    ServerOpts = ssl_test_lib:ssl_options([{verify, verify_peer} |
+                                           lists:keyreplace(cacerts, 1, ServerOpts0, {cacerts, ServerCas})],
+                                          Config),
+    ClientOpts = ssl_test_lib:ssl_options([{verify, verify_peer} |
+                                           lists:keyreplace(cacerts, 1,
+                                                            lists:keyreplace(cert, 1, ClientOpts0,
+                                                                             {cert, [Peer,CI1New,CI2New,CI1,CI2,CRNew,CROld]}),
+                                                            {cacerts, ClientCas0})],
+                                          Config),
+    ssl_test_lib:basic_test(ClientOpts, ServerOpts, Config),
+    ClientOpts2 = ssl_test_lib:ssl_options([{verify, verify_peer} |
+                                            lists:keyreplace(cacerts, 1,
+                                                             lists:keyreplace(cert, 1, ClientOpts0,
+                                                                              {cert, [Peer,CI1,CI1New,CI2,CI2New,CROld,CRNew]}),
+                                                             {cacerts, ClientCas0})],
+                                           Config),
+    ssl_test_lib:basic_test(ClientOpts2, ServerOpts, Config),
+    ok.
+
+chain_and_root(Config) ->
+    OwnCert = proplists:get_value(cert, Config),
+    {ok, ExtractedCAs} = ssl_pkix_db:extract_trusted_certs({der, proplists:get_value(cacerts, Config)}),
+    {ok, Root, Chain} = ssl_certificate:certificate_chain(OwnCert, ets:new(foo, []), ExtractedCAs, []),
+    {Chain, Root}.
 
 %%--------------------------------------------------------------------
 %% TLS 1.3 Test cases  -----------------------------------------------

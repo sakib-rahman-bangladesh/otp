@@ -45,6 +45,9 @@
          tcpip_tunnel_to_server/5, tcpip_tunnel_to_server/6
 	]).
 
+%%% Internal export
+-export([is_host/2]).
+
 %%% "Deprecated" types export:
 -export_type([ssh_daemon_ref/0, ssh_connection_ref/0, ssh_channel_id/0]).
 -opaque ssh_daemon_ref()     :: daemon_ref().
@@ -119,8 +122,7 @@ stop() ->
       OpenTcpSocket :: open_socket(),
       Options :: client_options().
 
-connect(OpenTcpSocket, Options) when is_port(OpenTcpSocket),
-                                     is_list(Options) ->
+connect(OpenTcpSocket, Options) when is_list(Options) ->
     connect(OpenTcpSocket, Options, infinity).
 
 
@@ -129,24 +131,24 @@ connect(OpenTcpSocket, Options) when is_port(OpenTcpSocket),
            ; (host(), inet:port_number(), client_options()) ->
                      {ok,connection_ref()} | {error,term()}.
 
-connect(Socket, UserOptions, NegotiationTimeout) when is_port(Socket),
-                                                      is_list(UserOptions) ->
-    case ssh_options:handle_options(client, UserOptions) of
-	{error, Error} ->
-	    {error, Error};
-	Options ->
-           case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
-               ok ->
-                   connect_socket(Socket, Options, NegotiationTimeout);
-               {error,SockError} ->
-                   {error,SockError}
-           end
-        end;
-
 connect(Host, Port, Options) when is_integer(Port),
                                   Port>0,
                                   is_list(Options) ->
-    connect(Host, Port, Options, infinity).
+    connect(Host, Port, Options, infinity);
+
+connect(Socket, UserOptions, NegotiationTimeout) when is_list(UserOptions) ->
+    case ssh_options:handle_options(client, UserOptions) of
+	{error, Error} ->
+	    {error, Error};
+
+	Options = #{} ->
+            case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
+                ok ->
+                    continue_connect(Socket, Options, NegotiationTimeout);
+                {error,SockError} ->
+                    {error,SockError}
+            end
+    end.
 
 
 -spec connect(Host, Port, Options, NegotiationTimeout) -> {ok,connection_ref()} | {error,term()} when
@@ -159,42 +161,37 @@ connect(Host0, Port, UserOptions, NegotiationTimeout) when is_integer(Port),
                                                            Port>0,
                                                            is_list(UserOptions) ->
     case ssh_options:handle_options(client, UserOptions) of
-	{error, _Reason} = Error ->
-	    Error;
+	{error, Reason} ->
+            {error, Reason};
+        
         Options ->
-	    {_, Transport, _} = TransportOpts = ?GET_OPT(transport, Options),
-	    ConnectionTimeout = ?GET_OPT(connect_timeout, Options),
             SocketOpts = [{active,false} | ?GET_OPT(socket_options,Options)],
-            Host = mangle_connect_address(Host0, SocketOpts),
-	    try Transport:connect(Host, Port, SocketOpts, ConnectionTimeout) of
-		{ok, Socket} ->
-                    connect_socket(Socket,
-                                   ?PUT_INTERNAL_OPT({host,Host}, Options),
-                                   NegotiationTimeout);
-		{error, Reason} ->
-		    {error, Reason}
-	    catch
-		exit:{function_clause, _F} ->
-		    {error, {options, {transport, TransportOpts}}};
-		exit:badarg ->
-		    {error, {options, {socket_options, SocketOpts}}}
-	    end
+            Host = mangle_connect_address(Host0, Options),
+            try 
+                {_, Callback, _} = ?GET_OPT(transport, Options),
+                Callback:connect(Host, Port, SocketOpts, ?GET_OPT(connect_timeout,Options))
+            of
+                {ok, Socket} ->
+                    continue_connect(Socket, Options, NegotiationTimeout);
+                {error, Reason} ->
+                    {error, Reason}
+            catch
+                _:badarg -> {error, {options,?GET_OPT(socket_options,Options)}};
+                _:{error,Reason} -> {error,Reason};
+                error:Error -> {error,Error};
+                Class:Error -> {error, {Class,Error}}
+            end
     end.
 
-
-connect_socket(Socket, Options0, NegotiationTimeout) ->
-    {ok, {Host,Port}} = inet:sockname(Socket),
-    Profile = ?GET_OPT(profile, Options0),
-    {ok, SystemSup} = sshc_sup:start_child(Host, Port, Profile, Options0),
-    {ok, SubSysSup} = ssh_system_sup:start_subsystem(SystemSup, client, Host, Port, Profile, Options0),
-    ConnectionSup = ssh_system_sup:connection_supervisor(SystemSup),
-    Opts = ?PUT_INTERNAL_OPT([{user_pid,self()},
-                              {supervisors, [{system_sup, SystemSup},
-                                             {subsystem_sup, SubSysSup},
-                                             {connection_sup, ConnectionSup}]}
-                             ], Options0),
-    ssh_connection_handler:start_connection(client, Socket, Opts, NegotiationTimeout).
-
+%%%----------------
+continue_connect(Socket, Options0, NegTimeout) ->
+    {ok, {SockHost,SockPort}} = inet:sockname(Socket),
+    Options = ?PUT_INTERNAL_OPT([{negotiation_timeout,NegTimeout}], Options0),
+    Address = #address{address = SockHost,
+                       port = SockPort,
+                       profile = ?GET_OPT(profile,Options)
+                      },
+    ssh_system_sup:start_subsystem(client, Address, Socket, Options).
 
 %%--------------------------------------------------------------------
 -spec close(ConnectionRef) -> ok | {error,term()} when
@@ -272,46 +269,48 @@ daemon(Port) ->
 
 -spec daemon(inet:port_number()|open_socket(), daemon_options()) -> {ok,daemon_ref()} | {error,term()}.
 
-daemon(Socket, UserOptions) when is_port(Socket) ->
-    try
-        #{} = Options = ssh_options:handle_options(server, UserOptions),
+daemon(Port, UserOptions) when 0 =< Port,Port =< 65535 ->
+    daemon(any, Port, UserOptions);
 
-        case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
-            ok ->
-                {ok, {IP,Port}} = inet:sockname(Socket),
-                finalize_start(IP, Port, ?GET_OPT(profile, Options),
-                               ?PUT_INTERNAL_OPT({connected_socket, Socket}, Options),
-                               fun(Opts, DefaultResult) ->
-                                       try ssh_acceptor:handle_established_connection(
-                                             IP, Port, Opts, Socket)
-                                       of
-                                           {error,Error} ->
-                                               {error,Error};
-                                           _ ->
-                                               DefaultResult
-                                       catch
-                                           C:R ->
-                                               {error,{could_not_start_connection,{C,R}}}
-                                       end
-                               end);
-            {error,SockError} ->
-                {error,SockError}
-            end
-    catch
-        throw:bad_fd ->
-            {error,bad_fd};
-        throw:bad_socket ->
-            {error,bad_socket};
-        error:{badmatch,{error,Error}} ->
-            {error,Error};
-        error:Error ->
-            {error,Error};
-        _C:_E ->
-            {error,{cannot_start_daemon,_C,_E}}
-    end;
+daemon(Socket, UserOptions) ->
+    case ssh_options:handle_options(server, UserOptions) of
+        #{} = Options0 ->
+            case valid_socket_to_use(Socket, ?GET_OPT(transport,Options0)) of
+                ok ->
+                    try
+                        %% throws error:Error if no usable hostkey is found
+                        ssh_connection_handler:available_hkey_algorithms(server, Options0),
+                        {ok, {SockHost,SockPort}} = inet:sockname(Socket),
+                        Address = #address{address = SockHost,
+                                           port = SockPort,
+                                           profile = ?GET_OPT(profile,Options0)
+                                          },
+                        Options = ?PUT_INTERNAL_OPT({connected_socket, Socket}, Options0),
+                        case ssh_system_sup:start_subsystem(server, Address, Socket, Options) of
+                            {ok,Pid} ->
+                                {ok,Pid};
+                            {error, {already_started, _}} ->
+                                {error, eaddrinuse};
+                            {error, Error} ->
+                                {error, Error}
+                        end
+                    catch
+                        error:{shutdown,Err} ->
+                            {error,Err};
+                        exit:{noproc, _} ->
+                            {error, ssh_not_started};
+                        C:R ->
+                            {error,{could_not_start_connection,{C,R}}}
+                    end;
 
-daemon(Port, UserOptions) when 0 =< Port, Port =< 65535 ->
-    daemon(any, Port, UserOptions).
+                {error,SockError} ->
+                    {error,SockError}
+            end;
+
+        {error,OptionError} ->
+            {error,OptionError}
+    end.
+
 
 
 -spec daemon(any | inet:ip_address(), inet:port_number(), daemon_options()) -> {ok,daemon_ref()} | {error,term()}
@@ -323,31 +322,48 @@ daemon(Host0, Port0, UserOptions0) when 0 =< Port0, Port0 =< 65535,
     try
         {Host1, UserOptions} = handle_daemon_args(Host0, UserOptions0),
         #{} = Options0 = ssh_options:handle_options(server, UserOptions),
-        {open_listen_socket(Host1, Port0, Options0), Options0}
+        %% We need to open the listen socket here before start of the system supervisor. That
+        %% is because Port0 might be 0, or if an FD is provided in the Options0, in which case
+        %% the real listening port will be known only after the gen_tcp:listen call.
+        maybe_open_listen_socket(Host1, Port0, Options0)
     of
-        {{{Host,Port}, ListenSocket}, Options1} ->
+        {Host, Port, ListenSocket, Options1} ->
             try
                 %% Now Host,Port is what to use for the supervisor to register its name,
-                %% and ListenSocket is for listening on connections. But it is still owned
-                %% by self()...
-                finalize_start(Host, Port, ?GET_OPT(profile, Options1),
-                               ?PUT_INTERNAL_OPT({lsocket,{ListenSocket,self()}}, Options1),
-                               fun(Opts, Result) ->
-                                       {_, Callback, _} = ?GET_OPT(transport, Opts),
-                                       receive
-                                           {request_control, ListenSocket, ReqPid} ->
-                                               ok = Callback:controlling_process(ListenSocket, ReqPid),
-                                               ReqPid ! {its_yours,ListenSocket},
-                                               Result
-                                       end
-                               end)
+                %% and ListenSocket, if provided,  is for listening on connections. But
+                %% it is still owned by self()...
+
+                %% throws error:Error if no usable hostkey is found
+                ssh_connection_handler:available_hkey_algorithms(server, Options1),
+                ssh_system_sup:start_system(server,
+                                            #address{address = Host,
+                                                     port = Port,
+                                                     profile = ?GET_OPT(profile,Options1)},
+                                            Options1)
             of
-                {error,Err} ->
+                {ok,DaemonRef} when ListenSocket == undefined ->
+                    {ok,DaemonRef};
+                {ok,DaemonRef} ->
+                    receive
+                        {request_control, ListenSocket, ReqPid} ->
+                            {_, Callback, _} = ?GET_OPT(transport, Options1),
+                            ok = Callback:controlling_process(ListenSocket, ReqPid),
+                            ReqPid ! {its_yours,ListenSocket}
+                    end,
+                    {ok,DaemonRef};
+                {error, {already_started, _}} ->
+                    close_listen_socket(ListenSocket, Options1),
+                    {error, eaddrinuse};
+                {error, Error} ->
+                    close_listen_socket(ListenSocket, Options1),
+                    {error, Error}
+            catch
+                error:{shutdown,Err} ->
                     close_listen_socket(ListenSocket, Options1),
                     {error,Err};
-                OK ->
-                    OK
-            catch
+                exit:{noproc, _} ->
+                    close_listen_socket(ListenSocket, Options1),
+                    {error, ssh_not_started};
                 error:Error ->
                     close_listen_socket(ListenSocket, Options1),
                     error(Error);
@@ -384,20 +400,16 @@ daemon(_, _, _) ->
       InfoTuple :: daemon_info_tuple().
 
 daemon_info(DaemonRef) ->
-    case catch ssh_system_sup:acceptor_supervisor(DaemonRef) of
-	AsupPid when is_pid(AsupPid) ->
-	    [{Host,Port,Profile}] =
-		[{Hst,Prt,Prf} 
-                 || {{ssh_acceptor_sup,Hst,Prt,Prf},_Pid,worker,[ssh_acceptor]} 
-                        <- supervisor:which_children(AsupPid)],
-            IP =
-                case inet:parse_strict_address(Host) of
-                    {ok,IP0} -> IP0;
-                    _ -> Host
+    case ssh_system_sup:get_daemon_listen_address(DaemonRef) of
+        {ok,A} ->
+            Address =
+                case inet:parse_strict_address(A#address.address) of
+                    {ok,IP} -> A#address{address=IP};
+                    _ -> A
                 end,
-
             Opts =
-                case ssh_system_sup:get_options(DaemonRef, Host, Port, Profile) of
+                %% Pick a subset of the Options to present:
+                case ssh_system_sup:get_options(DaemonRef, Address) of
                     {ok, OptMap} ->
                         lists:sort(
                           maps:to_list(
@@ -408,11 +420,12 @@ daemon_info(DaemonRef) ->
                         []
                 end,
             
-	    {ok, [{port,Port},
-                  {ip,IP},
-                  {profile,Profile},
-                  {options,Opts}
+	    {ok, [{port,    Address#address.port},
+                  {ip,      Address#address.address},
+                  {profile, Address#address.profile},
+                  {options, Opts}
                  ]};
+        
 	_ ->
 	    {error,bad_daemon_ref}
     end.
@@ -456,14 +469,14 @@ stop_listener(Address, Port) ->
 
 -spec stop_listener(any|inet:ip_address(), inet:port_number(), term()) -> ok.
 
-stop_listener(any, Port, Profile) ->
-    map_ip(fun(IP) ->
-                   ssh_system_sup:stop_listener(IP, Port, Profile) 
-           end, [{0,0,0,0},{0,0,0,0,0,0,0,0}]);
 stop_listener(Address, Port, Profile) ->
-    map_ip(fun(IP) ->
-                   ssh_system_sup:stop_listener(IP, Port, Profile) 
-           end, {address,Address}).
+    lists:foreach(fun({Sup,_Addr}) ->
+                          stop_listener(Sup)
+                  end,
+                  ssh_system_sup:addresses(server,
+                                           #address{address=Address,
+                                                    port=Port,
+                                                    profile=Profile})).
 
 %%--------------------------------------------------------------------
 %% Description: Stops the listener and all connections started by
@@ -483,14 +496,14 @@ stop_daemon(Address, Port) ->
 
 -spec stop_daemon(any|inet:ip_address(), inet:port_number(), atom()) -> ok.
 
-stop_daemon(any, Port, Profile) ->
-    map_ip(fun(IP) ->
-                   ssh_system_sup:stop_system(server, IP, Port, Profile) 
-           end, [{0,0,0,0},{0,0,0,0,0,0,0,0}]);
 stop_daemon(Address, Port, Profile) ->
-    map_ip(fun(IP) ->
-                   ssh_system_sup:stop_system(server, IP, Port, Profile) 
-           end, {address,Address}).
+    lists:foreach(fun({Sup,_Addr}) ->
+                          stop_daemon(Sup)
+                  end,
+                  ssh_system_sup:addresses(server,
+                                           #address{address=Address,
+                                                    port=Port,
+                                                    profile=Profile})).
 
 %%--------------------------------------------------------------------
 %% Description: Starts an interactive shell to an SSH server on the
@@ -499,9 +512,6 @@ stop_daemon(Address, Port, Profile) ->
 %% exit from the shell)
 %%--------------------------------------------------------------------
 -spec shell(open_socket() | host() | connection_ref()) ->  _.
-
-shell(Socket) when is_port(Socket) ->
-    shell(Socket, []);
 
 shell(ConnectionRef) when is_pid(ConnectionRef) ->
     case ssh_connection:session_channel(ConnectionRef, infinity) of
@@ -525,23 +535,37 @@ shell(ConnectionRef) when is_pid(ConnectionRef) ->
 	    Error
     end;
 
-shell(Host) ->
-    shell(Host, ?SSH_DEFAULT_PORT, []).
+shell(Dest) ->
+    case is_host(Dest, []) of
+        true ->
+            shell(Dest, ?SSH_DEFAULT_PORT, []);
+        false ->
+            %% Maybe socket
+            shell_socket(Dest, [])
+    end.
+
 
 
 -spec shell(open_socket() | host(), client_options()) ->  _.
 
-shell(Socket, Options) when is_port(Socket) ->
+shell(Dest, Options) ->
+    case is_host(Dest, Options) of
+        true ->
+            shell(Dest, ?SSH_DEFAULT_PORT, Options);
+        false ->
+            %% Maybe socket
+            shell_socket(Dest, Options)
+    end.
+
+shell_socket(Socket, Options) ->
     case connect(Socket, Options) of
         {ok,ConnectionRef} ->
             shell(ConnectionRef),
             close(ConnectionRef);
         Error ->
             Error
-    end;
-
-shell(Host, Options) ->
-    shell(Host, ?SSH_DEFAULT_PORT, Options).
+    end.
+    
 
 
 -spec shell(Host, Port, Options) -> _ when
@@ -755,17 +779,26 @@ is_tcp_socket(Socket) ->
     end.
 
 %%%----------------------------------------------------------------
-open_listen_socket(_Host0, Port0, Options0) ->
-    {ok,LSock} =
-        case ?GET_SOCKET_OPT(fd, Options0) of
-            undefined ->
-                ssh_acceptor:listen(Port0, Options0);
+maybe_open_listen_socket(Host, Port, Options) ->
+    Opened =
+        case ?GET_SOCKET_OPT(fd, Options) of
+            undefined when Port == 0 ->
+                ssh_acceptor:listen(0, Options);
             Fd when is_integer(Fd) ->
                 %% Do gen_tcp:listen with the option {fd,Fd}:
-                ssh_acceptor:listen(0, Options0)
+                ssh_acceptor:listen(0, Options);
+            undefined ->
+                open_later
         end,
-    {ok,{LHost,LPort}} = inet:sockname(LSock),
-    {{LHost,LPort}, LSock}.
+    case Opened of
+        {ok,LSock} ->
+            {ok,{LHost,LPort}} = inet:sockname(LSock),
+            {LHost, LPort, LSock, ?PUT_INTERNAL_OPT({lsocket,{LSock,self()}}, Options)};
+        open_later ->
+            {Host, Port, undefined, Options};
+        Others ->
+            Others
+    end.
 
 %%%----------------------------------------------------------------
 close_listen_socket(ListenSocket, Options) ->
@@ -777,40 +810,23 @@ close_listen_socket(ListenSocket, Options) ->
     end.
 
 %%%----------------------------------------------------------------
-finalize_start(Host, Port, Profile, Options0, F) ->
-    try
-        %% throws error:Error if no usable hostkey is found
-        ssh_connection_handler:available_hkey_algorithms(server, Options0),
-
-        sshd_sup:start_child(Host, Port, Profile, Options0)
-    of
-        {error, {already_started, _}} ->
-            {error, eaddrinuse};
-        {error, Error} ->
-            {error, Error};
-        Result = {ok,_} ->
-            F(Options0, Result)
+is_host(X, Opts) ->
+    try is_host1(mangle_connect_address(X, Opts))
     catch
-        error:{shutdown,Err} ->
-            {error,Err};
-        exit:{noproc, _} ->
-            {error, ssh_not_started}
+        _:_ -> false
     end.
+            
+
+is_host1(L) when is_list(L) -> true; %% "string()"
+is_host1(T) when is_tuple(T), size(T)==4 -> lists:all(fun(I) -> 0=<I andalso I=<255 end,
+                                                      tuple_to_list(T));
+is_host1(T) when is_tuple(T), size(T)==16 -> lists:all(fun(I) -> 0=<I andalso I=<65535 end,
+                                                       tuple_to_list(T));
+is_host1(loopback) -> true.
 
 %%%----------------------------------------------------------------
-map_ip(Fun, {address,IP}) when is_tuple(IP) ->
-    Fun(IP);
-map_ip(Fun, {address,Address}) ->
-    IPs = try {ok,#hostent{h_addr_list=IP0s}} = inet:gethostbyname(Address),
-               IP0s
-          catch
-              _:_ -> []
-          end,
-    map_ip(Fun, IPs);
-map_ip(Fun, IPs) ->
-    lists:map(Fun, IPs).
-
-%%%----------------------------------------------------------------
+mangle_connect_address(A,  #{socket_options := SockOpts}) ->
+    mangle_connect_address(A, SockOpts);
 mangle_connect_address(A, SockOpts) ->
     mangle_connect_address1(A, proplists:get_value(inet6,SockOpts,false)).
 

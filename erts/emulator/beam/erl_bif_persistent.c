@@ -170,9 +170,9 @@ static int cleanup_trap_data(Binary *bp);
  * Traps
  */
 
-static Export *persistent_term_get_all_export;
+static Export persistent_term_get_all_export;
 static BIF_RETTYPE persistent_term_get_all_trap(BIF_ALIST_2);
-static Export *persistent_term_info_export;
+static Export persistent_term_info_export;
 static BIF_RETTYPE persistent_term_info_trap(BIF_ALIST_1);
 
 /*
@@ -439,7 +439,7 @@ BIF_RETTYPE persistent_term_put_2(BIF_ALIST_2)
 
 BIF_RETTYPE persistent_term_get_0(BIF_ALIST_0)
 {
-    HashTable* hash_table = (HashTable *) erts_atomic_read_nob(&the_hash_table);
+    HashTable* hash_table;
     TrapData* trap_data;
     Eterm res = NIL;
     Eterm magic_ref;
@@ -449,6 +449,8 @@ BIF_RETTYPE persistent_term_get_0(BIF_ALIST_0)
     if (!try_seize_update_permission(BIF_P)) {
         ERTS_BIF_YIELD0(BIF_TRAP_EXPORT(BIF_persistent_term_get_0), BIF_P);
     }
+
+    hash_table = (HashTable *) erts_atomic_read_nob(&the_hash_table);
 
     magic_ref = alloc_trap_data(BIF_P);
     mbp = erts_magic_ref2bin(magic_ref);
@@ -465,7 +467,7 @@ BIF_RETTYPE persistent_term_get_0(BIF_ALIST_0)
         BIF_RET(res);
     } else {
         BUMP_ALL_REDS(BIF_P);
-        BIF_TRAP2(persistent_term_get_all_export, BIF_P, magic_ref, res);
+        BIF_TRAP2(&persistent_term_get_all_export, BIF_P, magic_ref, res);
     }
 }
 
@@ -673,7 +675,7 @@ BIF_RETTYPE erts_internal_erase_persistent_terms_0(BIF_ALIST_0)
 
 BIF_RETTYPE persistent_term_info_0(BIF_ALIST_0)
 {
-    HashTable* hash_table = (HashTable *) erts_atomic_read_nob(&the_hash_table);
+    HashTable* hash_table;
     TrapData* trap_data;
     Eterm res = NIL;
     Eterm magic_ref;
@@ -683,6 +685,8 @@ BIF_RETTYPE persistent_term_info_0(BIF_ALIST_0)
     if (!try_seize_update_permission(BIF_P)) {
         ERTS_BIF_YIELD0(BIF_TRAP_EXPORT(BIF_persistent_term_info_0), BIF_P);
     }
+
+    hash_table = (HashTable *) erts_atomic_read_nob(&the_hash_table);
 
     magic_ref = alloc_trap_data(BIF_P);
     mbp = erts_magic_ref2bin(magic_ref);
@@ -700,7 +704,7 @@ BIF_RETTYPE persistent_term_info_0(BIF_ALIST_0)
         BIF_RET(res);
     } else {
         BUMP_ALL_REDS(BIF_P);
-        BIF_TRAP2(persistent_term_info_export, BIF_P, magic_ref, res);
+        BIF_TRAP2(&persistent_term_info_export, BIF_P, magic_ref, res);
     }
 }
 
@@ -767,7 +771,7 @@ persistent_term_get_all_trap(BIF_ALIST_2)
     ASSERT(is_list(res));
     if (trap_data->remaining > 0) {
         BUMP_ALL_REDS(BIF_P);
-        BIF_TRAP2(persistent_term_get_all_export, BIF_P, BIF_ARG_1, res);
+        BIF_TRAP2(&persistent_term_get_all_export, BIF_P, BIF_ARG_1, res);
     } else {
         release_update_permission(0);
         trap_data->got_update_permission = 0;
@@ -863,7 +867,7 @@ persistent_term_info_trap(BIF_ALIST_1)
     if (trap_data->remaining > 0) {
         ASSERT(res == am_ok);
         BUMP_ALL_REDS(BIF_P);
-        BIF_TRAP1(persistent_term_info_export, BIF_P, BIF_ARG_1);
+        BIF_TRAP1(&persistent_term_info_export, BIF_P, BIF_ARG_1);
     } else {
         release_update_permission(0);
         trap_data->got_update_permission = 0;

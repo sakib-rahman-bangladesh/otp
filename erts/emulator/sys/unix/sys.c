@@ -49,6 +49,10 @@
 #include <sys/ioctl.h>
 #endif
 
+#ifdef ADDRESS_SANITIZER
+#  include <sanitizer/asan_interface.h>
+#endif
+
 #define ERTS_WANT_BREAK_HANDLING
 #define WANT_NONBLOCKING    /* must define this to pull in defs from sys.h */
 #include "sys.h"
@@ -84,7 +88,6 @@ extern void erl_sys_args(int*, char**);
 /* The following two defs should probably be moved somewhere else */
 
 extern void erts_sys_init_float(void);
-
 
 #ifdef DEBUG
 static int debug_log = 0;
@@ -236,15 +239,6 @@ thr_create_prepare_child(void *vtcdp)
     erts_lcnt_thread_setup();
 #endif
 
-#ifndef NO_FPE_SIGNALS
-    /*
-     * We do not want fp exeptions in other threads than the
-     * scheduler threads. We enable fpe explicitly in the scheduler
-     * threads after this.
-     */
-    erts_thread_disable_fpe();
-#endif
-
     erts_sched_bind_atthrcreate_child(tcdp->sched_bind_data);
 }
 
@@ -391,6 +385,9 @@ void erts_sys_sigsegv_handler(int signo) {
  */
 int
 erts_sys_is_area_readable(char *start, char *stop) {
+#ifdef ADDRESS_SANITIZER
+    return __asan_region_is_poisoned(start, stop-start) == NULL;
+#else
     int fds[2];
     if (!pipe(fds)) {
         /* We let write try to figure out if the pointers are readable */
@@ -405,7 +402,7 @@ erts_sys_is_area_readable(char *start, char *stop) {
         return 1;
     }
     return 0;
-
+#endif
 }
 
 static ERTS_INLINE int
@@ -680,9 +677,6 @@ void erts_replace_intr(void) {
 void init_break_handler(void)
 {
    sys_signal(SIGINT,  request_break);
-#ifndef ETHR_UNUSABLE_SIGUSRX
-   sys_signal(SIGUSR1, generic_signal_handler);
-#endif /* #ifndef ETHR_UNUSABLE_SIGUSRX */
    sys_signal(SIGQUIT, generic_signal_handler);
 }
 
@@ -697,6 +691,9 @@ void
 erts_sys_unix_later_init(void)
 {
     sys_signal(SIGTERM, generic_signal_handler);
+#ifndef ETHR_UNUSABLE_SIGUSRX
+   sys_signal(SIGUSR1, generic_signal_handler);
+#endif /* #ifndef ETHR_UNUSABLE_SIGUSRX */
 
     /* Ignore SIGCHLD to ensure orphaned processes don't turn into zombies on
      * death when we're pid 1. */
@@ -927,7 +924,7 @@ void sys_preload_end(Preload* p)
 */
 int sys_get_key(int fd) {
     int c, ret;
-    unsigned char rbuf[64];
+    unsigned char rbuf[64] = {0};
     fd_set fds;
 
     fflush(stdout);		/* Flush query ??? */
@@ -1106,7 +1103,6 @@ static void initialize_darwin_main_thread_pipes(void)
 void
 erts_sys_main_thread(void)
 {
-    erts_thread_disable_fpe();
 #ifdef __DARWIN__
     initialize_darwin_main_thread_pipes();
 #else

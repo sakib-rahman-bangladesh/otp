@@ -43,7 +43,7 @@
 
 -type ssl_handshake() :: #server_hello{} | #server_hello_done{} | #certificate{} | #certificate_request{} |
 			 #client_key_exchange{} | #finished{} | #certificate_verify{} |
-			 #hello_request{} | #next_protocol{}.
+			 #hello_request{} | #next_protocol{} | #end_of_early_data{}.
 
 %% Create handshake messages
 -export([hello_request/0, server_hello/4, server_hello_done/0,
@@ -81,9 +81,10 @@
 	]).
 
 -export([get_cert_params/1,
+         select_own_cert/1,
          server_name/3,
          validation_fun_and_state/4,
-         handle_path_validation_error/7]).
+         path_validation_alert/1]).
 
 %%====================================================================
 %% Create handshake messages 
@@ -125,30 +126,33 @@ server_hello_done() ->
     #server_hello_done{}.
 
 %%--------------------------------------------------------------------
--spec certificate(der_cert(), db_handle(), certdb_ref(), client | server) -> #certificate{} | #alert{}.
+-spec certificate([der_cert()] | undefined, db_handle(), certdb_ref(), client | server) -> #certificate{} | #alert{}.
 %%
 %% Description: Creates a certificate message.
 %%--------------------------------------------------------------------
-certificate(OwnCert, CertDbHandle, CertDbRef, client) ->
+certificate(undefined, _, _, client) ->
+    %% If no suitable certificate is available, the client
+    %% SHOULD send a certificate message containing no
+    %% certificates. (chapter 7.4.6. RFC 4346)
+    #certificate{asn1_certificates = []};
+certificate([OwnCert], CertDbHandle, CertDbRef, client) ->
     Chain =
 	case ssl_certificate:certificate_chain(OwnCert, CertDbHandle, CertDbRef) of
 	    {ok, _,  CertChain} ->
 		CertChain;
 	    {error, _} ->
-		%% If no suitable certificate is available, the client
-		%% SHOULD send a certificate message containing no
-		%% certificates. (chapter 7.4.6. RFC 4346)
-		[]
-	end,
+                certificate(undefined, CertDbHandle, CertDbRef, client)
+        end,
     #certificate{asn1_certificates = Chain};
-
-certificate(OwnCert, CertDbHandle, CertDbRef, server) ->
+certificate([OwnCert], CertDbHandle, CertDbRef, server) ->
     case ssl_certificate:certificate_chain(OwnCert, CertDbHandle, CertDbRef) of
 	{ok, _, Chain} ->
 	    #certificate{asn1_certificates = Chain};
 	{error, Error} ->
             ?ALERT_REC(?FATAL, ?INTERNAL_ERROR, {server_has_no_suitable_certificates, Error})
-    end.
+    end;
+certificate([_, _ |_] = Chain, _, _, _) ->
+    #certificate{asn1_certificates = Chain}.
 
 %%--------------------------------------------------------------------
 -spec client_certificate_verify(undefined | der_cert(), binary(),
@@ -162,7 +166,7 @@ client_certificate_verify(undefined, _, _, _, _, _) ->
     ignore;
 client_certificate_verify(_, _, _, _, undefined, _) ->
     ignore;
-client_certificate_verify(OwnCert, MasterSecret, Version,
+client_certificate_verify([OwnCert|_], MasterSecret, Version,
 			  {HashAlgo, SignAlgo},
 			  PrivateKey, {Handshake, _}) ->
     case public_key:pkix_is_fixed_dh_cert(OwnCert) of
@@ -344,46 +348,21 @@ next_protocol(SelectedProtocol) ->
 %%--------------------------------------------------------------------
 certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         #{server_name_indication := ServerNameIndication,
-          partial_chain := PartialChain,
-          verify_fun := VerifyFun,
-          customize_hostname_check := CustomizeHostnameCheck,
-          crl_check := CrlCheck,
-          log_level := Level,
-          signature_algs := SignAlgos,
-          depth := Depth} = Opts, CRLDbHandle, Role, Host, Version,
-          #{cert_ext := CertExt,
-            ocsp_responder_certs := OcspResponderCerts,
-            ocsp_state := OcspState}) ->
+          partial_chain := PartialChain} = SSlOptions, 
+        CRLDbHandle, Role, Host, Version, CertExt) ->
     ServerName = server_name(ServerNameIndication, Host, Role),
-    [PeerCert | ChainCerts ] = ASN1Certs,
+    [PeerCert | _ChainCerts ] = ASN1Certs,
     try
-	{TrustedCert, CertPath}  =
-	    ssl_certificate:trusted_cert_and_path(ASN1Certs, CertDbHandle, CertDbRef,
-                                                  PartialChain),
-        ValidationFunAndState = validation_fun_and_state(VerifyFun, #{role => Role,
-                                                                      certdb => CertDbHandle,
-                                                                      certdb_ref => CertDbRef,
-                                                                      server_name => ServerName,
-                                                                      customize_hostname_check =>
-                                                                          CustomizeHostnameCheck,
-                                                                      signature_algs => SignAlgos,
-                                                                      signature_algs_cert => undefined,
-                                                                      version => Version,
-                                                                      crl_check => CrlCheck,
-                                                                      crl_db => CRLDbHandle,
-                                                                      cert_ext => CertExt,
-                                                                      issuer => TrustedCert,
-                                                                      ocsp_responder_certs => OcspResponderCerts,
-                                                                      ocsp_state => OcspState},
-                                                         CertPath, Level),
-        Options = [{max_path_length, Depth},
-                   {verify_fun, ValidationFunAndState}],
-	case public_key:pkix_path_validation(TrustedCert, CertPath, Options) of
+	PathsAndAnchors  =
+	    ssl_certificate:trusted_cert_and_paths(ASN1Certs, CertDbHandle, CertDbRef,
+                                                   PartialChain),
+        
+	case path_validate(PathsAndAnchors, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
+                           Version, SSlOptions, CertExt) of
 	    {ok, {PublicKeyInfo, _}} ->
                 {PeerCert, PublicKeyInfo};
 	    {error, Reason} ->
-		    handle_path_validation_error(Reason, PeerCert, ChainCerts, Opts, Options,
-                                         CertDbHandle, CertDbRef)
+                path_validation_alert(Reason)
 	end
     catch
 	error:{_,{error, {asn1, Asn1Reason}}} ->
@@ -789,7 +768,13 @@ encode_extensions([#cookie{cookie = Cookie} | Rest], Acc) ->
     CookieLen = byte_size(Cookie),
     Len = CookieLen + 2,
     encode_extensions(Rest, <<?UINT16(?COOKIE_EXT), ?UINT16(Len), ?UINT16(CookieLen),
-				    Cookie/binary, Acc/binary>>).
+                              Cookie/binary, Acc/binary>>);
+encode_extensions([#early_data_indication{} | Rest], Acc) ->
+    encode_extensions(Rest, <<?UINT16(?EARLY_DATA_EXT),
+                              ?UINT16(0), Acc/binary>>);
+encode_extensions([#early_data_indication_nst{indication = MaxSize} | Rest], Acc) ->
+    encode_extensions(Rest, <<?UINT16(?EARLY_DATA_EXT),
+                              ?UINT16(4), ?UINT32(MaxSize), Acc/binary>>).
 
 encode_cert_status_req(
     StatusType,
@@ -1330,7 +1315,9 @@ get_identities_binders(TicketData) ->
 %%
 get_identities_binders([], {Identities, Binders}, _) ->
     {lists:reverse(Identities), lists:reverse(Binders)};
-get_identities_binders([{Key, _, Identity, _, _, HKDF}|T], {I0, B0}, N) ->
+get_identities_binders([#ticket_data{key = Key,
+                                     identity = Identity,
+                                     cipher_suite = {_, HKDF}}|T], {I0, B0}, N) ->
     %% Use dummy binder for proper calculation of packet size when creating
     %% the real binder value.
     Binder = dummy_binder(HKDF),
@@ -1645,6 +1632,11 @@ get_cert_params(Cert) ->
         end,
     {SignAlgo, Param, PublicKeyAlgo, RSAKeySize}.
 
+select_own_cert([OwnCert| _]) ->
+    OwnCert;
+select_own_cert(undefined) ->
+    undefined.
+
 get_signature_scheme(undefined) ->
     undefined;
 get_signature_scheme(#signature_algorithms_cert{
@@ -1881,58 +1873,6 @@ maybe_check_hostname(OtpCert, valid_peer, SslState) ->
 maybe_check_hostname(_, valid, _) ->
     valid.
 
-handle_path_validation_error({bad_cert, unknown_ca} = Reason, PeerCert, Chain,  
-                             Opts, Options, CertDbHandle, CertsDbRef) ->
-    handle_incomplete_chain(PeerCert, Chain, Opts, Options, CertDbHandle, CertsDbRef, Reason);
-handle_path_validation_error({bad_cert, invalid_issuer} = Reason, PeerCert, Chain0, 
-			     Opts, Options, CertDbHandle, CertsDbRef) ->
-    handle_unordered_chain(PeerCert, Chain0, Opts, Options, CertDbHandle, CertsDbRef, Reason);
-handle_path_validation_error(Reason, _, _, _, _,_, _) ->
-    path_validation_alert(Reason).
-
-handle_incomplete_chain(PeerCert, Chain0,
-                        #{partial_chain := PartialChain} = Opts, Options, CertDbHandle, CertsDbRef, Reason) ->
-    case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, CertsDbRef) of
-        {ok, _, [PeerCert | _] = Chain} when Chain =/= Chain0 -> %% Chain candidate found          
-            case ssl_certificate:trusted_cert_and_path(Chain,
-                                                       CertDbHandle, CertsDbRef,
-                                                       PartialChain) of
-                {unknown_ca, []} ->
-                    path_validation_alert(Reason);
-                {Trusted, Path} ->
-                    case public_key:pkix_path_validation(Trusted, Path, Options) of
-                        {ok, {PublicKeyInfo,_}} ->
-                            {PeerCert, PublicKeyInfo};
-                        {error, PathError} ->
-                            handle_unordered_chain(PeerCert, Chain0, Opts, Options, 
-                                                   CertDbHandle, CertsDbRef, PathError)
-                    end
-            end;
-        _ ->
-            handle_unordered_chain(PeerCert, Chain0, Opts, Options, CertDbHandle, CertsDbRef, Reason)
-    end.
-
-handle_unordered_chain(PeerCert, Chain0,
-                     #{partial_chain := PartialChain}, Options, CertDbHandle, CertsDbRef, Reason) ->
-    {ok,  ExtractedCerts} = ssl_pkix_db:extract_trusted_certs({der, Chain0}),
-    case ssl_certificate:certificate_chain(PeerCert, CertDbHandle, ExtractedCerts, Chain0) of
-        {ok, _, Chain} when  Chain =/= Chain0 -> %% Chain appaears to be unordered 
-            case ssl_certificate:trusted_cert_and_path(Chain,
-                                                       CertDbHandle, CertsDbRef,
-                                                       PartialChain) of
-                {unknown_ca, []} ->
-                    path_validation_alert(Reason);
-                {Trusted, Path} ->
-                    case public_key:pkix_path_validation(Trusted, Path, Options) of
-                        {ok, {PublicKeyInfo,_}} ->
-                            {PeerCert, PublicKeyInfo};
-                        {error, PathError} ->
-                            path_validation_alert(PathError)
-                    end
-            end;
-        _ ->
-            path_validation_alert(Reason)
-    end.
 
 path_validation_alert({bad_cert, cert_expired}) ->
     ?ALERT_REC(?FATAL, ?CERTIFICATE_EXPIRED);
@@ -2031,22 +1971,30 @@ cert_status_check(_, #{ocsp_state := #{ocsp_stapling := true,
     valid; %% OCSP staple will now be checked by ssl_certifcate:verify_cert_extensions/2 in ssl_certifcate:validate
 cert_status_check(OtpCert, #{ocsp_state := #{ocsp_stapling := false}} = SslState, VerifyResult, CertPath, LogLevel) ->
     maybe_check_crl(OtpCert, SslState, VerifyResult, CertPath, LogLevel);
-cert_status_check(OtpCert, #{ocsp_state := #{ocsp_stapling := best_effort, %%TODO should we support
+cert_status_check(_OtpCert, #{ocsp_state := #{ocsp_stapling := true,
+                                              ocsp_expect := undetermined}},
+                  _VerifyResult, _CertPath, _LogLevel) ->
+    {bad_cert, {revocation_status_undetermined, not_stapled}};
+cert_status_check(OtpCert, #{ocsp_state := #{ocsp_stapling := best_effort, %% TODO support this ?
                                              ocsp_expect := undetermined}} = SslState, 
                   VerifyResult, CertPath, LogLevel) ->
-    maybe_check_crl(OtpCert, SslState, VerifyResult, CertPath, LogLevel).
+    maybe_check_crl(OtpCert, SslState, VerifyResult, CertPath, LogLevel);
+cert_status_check(_OtpCert, #{ocsp_state := #{ocsp_stapling := true,
+                                              ocsp_expect := no_staple}},
+                  _VerifyResult, _CertPath, _LogLevel) ->
+    {bad_cert, {revocation_status_undetermined, not_stapled}}.
 
 maybe_check_crl(_, #{crl_check := false}, _, _, _) ->
     valid;
-maybe_check_crl(_, #{crl_check := peer}, _, valid, _) -> %% Do not check CAs with this option.
+maybe_check_crl(_, #{crl_check := peer}, valid, _, _) -> %% Do not check CAs with this option.
     valid;
 maybe_check_crl(OtpCert, #{crl_check := Check, 
                      certdb := CertDbHandle,
                      certdb_ref := CertDbRef,
                      crl_db := {Callback, CRLDbHandle}}, _, CertPath, LogLevel) ->
     Options = [{issuer_fun, {fun(_DP, CRL, Issuer, DBInfo) ->
-				     ssl_crl:trusted_cert_and_path(CRL, Issuer, {CertPath,
-                                                                                 DBInfo})
+				     ssl_crl:trusted_cert_and_path(CRL, Issuer, CertPath,
+                                                                   DBInfo)
 			     end, {CertDbHandle, CertDbRef}}}, 
 	       {update_crl, fun(DP, CRL) ->
                                     case Callback:fresh_crl(DP, CRL) of
@@ -2881,6 +2829,7 @@ decode_extensions(<<?UINT16(?COOKIE_EXT), ?UINT16(Len), ?UINT16(CookieLen),
   when Len == CookieLen + 2 ->
     decode_extensions(Rest, Version, MessageType,
                       Acc#{cookie => #cookie{cookie = Cookie}});
+
 %% RFC6066, if a server returns a "CertificateStatus" message, then
 %% the server MUST have included an extension of type "status_request"
 %% with empty "extension_data" in the extended server hello.
@@ -2905,6 +2854,18 @@ decode_extensions(<<?UINT16(?STATUS_REQUEST), ?UINT16(Len),
         _Other ->
             decode_extensions(Rest, Version, MessageType, Acc)
     end;
+
+decode_extensions(<<?UINT16(?EARLY_DATA_EXT), ?UINT16(0), Rest/binary>>,
+                  Version, MessageType, Acc) ->
+    decode_extensions(Rest, Version, MessageType,
+                      Acc#{early_data => #early_data_indication{}});
+
+decode_extensions(<<?UINT16(?EARLY_DATA_EXT), ?UINT16(4), ?UINT32(MaxSize),
+                    Rest/binary>>,
+                  Version, MessageType, Acc) ->
+    decode_extensions(Rest, Version, MessageType,
+                      Acc#{early_data =>
+                               #early_data_indication_nst{indication = MaxSize}});
 
 %% Ignore data following the ClientHello (i.e.,
 %% extensions) if not understood.
@@ -3599,3 +3560,51 @@ empty_extensions(_, server_hello) ->
 
 handle_log(Level, {LogLevel, ReportMap, Meta}) ->
     ssl_logger:log(Level, LogLevel, ReportMap, Meta).
+
+
+path_validate([{TrustedCert, Path}], ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
+              Version, SslOptions, CertExt) ->
+    path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, 
+                    CRLDbHandle, Version, SslOptions, CertExt);
+path_validate([{TrustedCert, Path} | Rest], ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
+              Version, SslOptions, CertExt) ->
+    case path_validation(TrustedCert, Path, ServerName, 
+                         Role, CertDbHandle, CRLDbHandle, CertDbRef, 
+                         Version, SslOptions, CertExt) of
+        {ok, _} = Result ->
+            Result;
+        {error, _} ->
+            path_validate(Rest, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
+                          Version, SslOptions, CertExt)
+    end.
+
+path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle, Version,
+                #{verify_fun := VerifyFun,
+                  customize_hostname_check := CustomizeHostnameCheck,
+                  crl_check := CrlCheck,
+                  log_level := Level,
+                  signature_algs := SignAlgos,
+                  depth := Depth}, 
+                #{cert_ext := CertExt,
+                  ocsp_responder_certs := OcspResponderCerts,
+                  ocsp_state := OcspState}) ->
+    ValidationFunAndState = 
+        validation_fun_and_state(VerifyFun, #{role => Role,
+                                              certdb => CertDbHandle,
+                                              certdb_ref => CertDbRef,
+                                              server_name => ServerName,
+                                              customize_hostname_check =>
+                                                  CustomizeHostnameCheck,
+                                              signature_algs => SignAlgos,
+                                              signature_algs_cert => undefined,
+                                              version => Version,
+                                              crl_check => CrlCheck,
+                                              crl_db => CRLDbHandle,
+                                              cert_ext => CertExt,
+                                              issuer => TrustedCert,
+                                              ocsp_responder_certs => OcspResponderCerts,
+                                              ocsp_state => OcspState},
+                                 Path, Level),
+    Options = [{max_path_length, Depth},
+               {verify_fun, ValidationFunAndState}],
+    public_key:pkix_path_validation(TrustedCert, Path, Options).

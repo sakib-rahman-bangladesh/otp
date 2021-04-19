@@ -24,7 +24,7 @@
 -import(lists, [any/2,member/2,reverse/1,reverse/2,sort/1]).
 
 -record(st,
-	{safe :: cerl_sets:set(beam_asm:label()) %Safe labels.
+	{safe :: sets:set(beam_asm:label()) %Safe labels.
         }).
 
 -spec module(beam_utils:module_code(), [compile:option()]) ->
@@ -218,14 +218,14 @@ create_map(Trim, []) ->
 create_map(Trim, Moves) ->
     Map0 = [{Src,Dst-Trim} || {move,{y,Src},{y,Dst}} <- Moves],
     Map = maps:from_list(Map0),
-    IllegalTargets = cerl_sets:from_list([Dst || {move,_,{y,Dst}} <- Moves]),
+    IllegalTargets = sets:from_list([Dst || {move,_,{y,Dst}} <- Moves], [{version, 2}]),
     fun({y,Y0}) when Y0 < Trim ->
             case Map of
                 #{Y0:=Y} -> {y,Y};
                 #{} -> throw(not_possible)
             end;
        ({y,Y}) ->
-	    case cerl_sets:is_element(Y, IllegalTargets) of
+	    case sets:is_element(Y, IllegalTargets) of
 		true -> throw(not_possible);
 		false -> {y,Y-Trim}
 	    end;
@@ -292,6 +292,12 @@ remap([{make_fun3,F,Index,OldUniq,Dst0,{list,Env0}}|T], Map, Acc) ->
 remap([{deallocate,N}|Is], Map, Acc) ->
     I = {deallocate,Map({frame_size,N})},
     remap(Is, Map, [I|Acc]);
+remap([{recv_marker_clear,Ref}|Is], Map, Acc) ->
+    I = {recv_marker_clear,Map(Ref)},
+    remap(Is, Map, [I|Acc]);
+remap([{recv_marker_reserve,Mark}|Is], Map, Acc) ->
+    I = {recv_marker_reserve,Map(Mark)},
+    remap(Is, Map, [I|Acc]);
 remap([{swap,Reg1,Reg2}|Is], Map, Acc) ->
     I = {swap,Map(Reg1),Map(Reg2)},
     remap(Is, Map, [I|Acc]);
@@ -330,7 +336,7 @@ safe_labels([{label,L}|Is], Acc) ->
     end;
 safe_labels([_|Is], Acc) ->
     safe_labels(Is, Acc);
-safe_labels([], Acc) -> cerl_sets:from_list(Acc).
+safe_labels([], Acc) -> sets:from_list(Acc, [{version, 2}]).
 
 is_safe_label([{'%',_}|Is]) ->
     is_safe_label(Is);
@@ -400,11 +406,8 @@ frame_size([{call_fun,_}|Is], Safe) ->
     frame_size(Is, Safe);
 frame_size([{call,_,_}|Is], Safe) ->
     frame_size(Is, Safe);
-frame_size([{call_ext,_,_}=I|Is], Safe) ->
-    case beam_jump:is_exit_instruction(I) of
-	true -> throw(not_possible);
-	false -> frame_size(Is, Safe)
-    end;
+frame_size([{call_ext,_,_}|Is], Safe) ->
+    frame_size(Is, Safe);
 frame_size([{apply,_}|Is], Safe) ->
     frame_size(Is, Safe);
 frame_size([{bif,_,{f,L},_,_}|Is], Safe) ->
@@ -424,6 +427,10 @@ frame_size([{init_yregs,_}|Is], Safe) ->
 frame_size([{make_fun2,_,_,_,_}|Is], Safe) ->
     frame_size(Is, Safe);
 frame_size([{make_fun3,_,_,_,_,_}|Is], Safe) ->
+    frame_size(Is, Safe);
+frame_size([{recv_marker_clear,_}|Is], Safe) ->
+    frame_size(Is, Safe);
+frame_size([{recv_marker_reserve,_}|Is], Safe) ->
     frame_size(Is, Safe);
 frame_size([{get_map_elements,{f,L},_,_}|Is], Safe) ->
     frame_size_branch(L, Is, Safe);
@@ -447,7 +454,7 @@ frame_size(_, _) -> throw(not_possible).
 frame_size_branch(0, Is, Safe) ->
     frame_size(Is, Safe);
 frame_size_branch(L, Is, Safe) ->
-    case cerl_sets:is_element(L, Safe) of
+    case sets:is_element(L, Safe) of
 	false -> throw(not_possible);
 	true -> frame_size(Is, Safe)
     end.
@@ -485,8 +492,8 @@ is_not_used(Y, [{bs_set_position,Src1,Src2}|Is]) ->
         is_not_used(Y, Is);
 is_not_used(Y, [{call,_,_}|Is]) ->
     is_not_used(Y, Is);
-is_not_used(Y, [{call_ext,_,_}=I|Is]) ->
-    beam_jump:is_exit_instruction(I) orelse is_not_used(Y, Is);
+is_not_used(Y, [{call_ext,_,_}|Is]) ->
+    is_not_used(Y, Is);
 is_not_used(Y, [{call_fun,_}|Is]) ->
     is_not_used(Y, Is);
 is_not_used(_Y, [{deallocate,_}|_]) ->
@@ -509,6 +516,10 @@ is_not_used(Y, [{make_fun2,_,_,_,_}|Is]) ->
     is_not_used(Y, Is);
 is_not_used(Y, [{make_fun3,_,_,_,Dst,{list,Env}}|Is]) ->
     is_not_used_ss_dst(Y, Env, Dst, Is);
+is_not_used(Y, [{recv_marker_clear,Ref}|Is]) ->
+    Y =/= Ref andalso is_not_used(Y, Is);
+is_not_used(Y, [{recv_marker_reserve,Dst}|Is]) ->
+    Y =/= Dst andalso is_not_used(Y, Is);
 is_not_used(Y, [{swap,Reg1,Reg2}|Is]) ->
     Y =/= Reg1 andalso Y =/= Reg2 andalso is_not_used(Y, Is);
 is_not_used(Y, [{test,_,_,Ss}|Is]) ->

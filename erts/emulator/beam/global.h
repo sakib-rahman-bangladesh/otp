@@ -59,7 +59,6 @@ struct enif_environment_t /* ErlNifEnv */
     Eterm* hp;
     Eterm* hp_end;
     ErlHeapFragment* heap_frag;
-    int fpe_was_unmasked;
     struct enif_tmp_obj_t* tmp_obj_list;
     int exception_thrown; /* boolean */
     Process *tracee;
@@ -109,7 +108,7 @@ typedef struct ErtsResource_
 
 extern Eterm erts_bld_resource_ref(Eterm** hp, ErlOffHeap*, ErtsResource*);
 
-extern BeamInstr* erts_call_nif_early(Process* c_p, ErtsCodeInfo* ci);
+extern ErtsCodePtr erts_call_nif_early(Process* c_p, const ErtsCodeInfo* ci);
 extern void erts_pre_nif(struct enif_environment_t*, Process*,
 			 struct erl_module_nif*, Process* tracee);
 extern void erts_post_nif(struct enif_environment_t* env);
@@ -124,7 +123,7 @@ extern Eterm erts_nif_taints(Process* p);
 extern void erts_print_nif_taints(fmtfn_t to, void* to_arg);
 
 /* Loads the specified NIF. The caller must have code write permission. */
-Eterm erts_load_nif(Process *c_p, BeamInstr *I, Eterm filename, Eterm args);
+Eterm erts_load_nif(Process *c_p, ErtsCodePtr I, Eterm filename, Eterm args);
 
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
@@ -137,7 +136,7 @@ extern Eterm erts_nif_call_function(Process *p, Process *tracee,
                                     int argc, Eterm *argv);
 
 int erts_call_dirty_nif(ErtsSchedulerData *esdp, Process *c_p,
-			BeamInstr *I, Eterm *reg);
+                        ErtsCodePtr I, Eterm *reg);
 ErtsMessage* erts_create_message_from_nif_env(ErlNifEnv* msg_env);
 
 
@@ -340,6 +339,15 @@ void erl_grow_estack(ErtsEStack*, Uint need);
 #define ESTK_CONCAT(a,b) a##b
 #define ESTK_DEF_STACK(s) ESTK_CONCAT(s,_default_estack)
 
+#define ESTACK_DEFAULT_VALUE(estack_default_stack_array, alloc_type)    \
+    (ErtsEStack) {                                                      \
+        estack_default_stack_array,  /* start */                        \
+        estack_default_stack_array,  /* sp */                           \
+        estack_default_stack_array + DEF_ESTACK_SIZE, /* end */         \
+        estack_default_stack_array,  /* default */                      \
+        alloc_type /* alloc_type */                                     \
+    }
+
 #define DECLARE_ESTACK(s)				\
     Eterm ESTK_DEF_STACK(s)[DEF_ESTACK_SIZE];		\
     ErtsEStack s = {					\
@@ -365,6 +373,30 @@ do {							\
 	erts_free((s).alloc_type, (s).start); 		\
     }							\
 } while(0)
+
+#define DESTROY_ESTACK_EXPLICIT_DEFAULT_ARRAY(s, the_estack_default_array) \
+    do {							\
+        if ((s).start != the_estack_default_array) {            \
+            erts_free((s).alloc_type, (s).start); 		\
+        }							\
+    } while(0)
+
+/* Allocate an array on the heap and move the stack there if the
+   default array (that is allocated on the heap is used) */
+#define ENSURE_ESTACK_HEAP_STACK_ARRAY(s, the_estack_default_array)\
+do {\
+    if ((s).start == the_estack_default_array) {\
+	UWord _wsz = ESTACK_COUNT(s);\
+        Eterm *_prev_stack_array = s.start;\
+	(s).start = erts_alloc((s).alloc_type,                          \
+			       DEF_ESTACK_SIZE * sizeof(Eterm));\
+	sys_memcpy((s).start, _prev_stack_array, _wsz*sizeof(Eterm));\
+	(s).sp = (s).start + _wsz;\
+	(s).end = (s).start + DEF_ESTACK_SIZE;\
+	(s).alloc_type = (s).alloc_type;\
+    }\
+    (s).edefault = NULL;\
+ } while (0)
 
 
 /*
@@ -465,7 +497,7 @@ do {							\
 
 #define ESTACK_COUNT(s) ((s).sp - (s).start)
 #define ESTACK_ISEMPTY(s) ((s).sp == (s).start)
-#define ESTACK_POP(s) (*(--(s).sp))
+#define ESTACK_POP(s) (ASSERT(!ESTACK_ISEMPTY(s)),(*(--(s).sp)))
 
 
 /*
@@ -485,6 +517,15 @@ typedef struct ErtsWStack_ {
 void erl_grow_wstack(ErtsWStack*, Uint need);
 #define WSTK_CONCAT(a,b) a##b
 #define WSTK_DEF_STACK(s) WSTK_CONCAT(s,_default_wstack)
+
+#define WSTACK_DEFAULT_VALUE(wstack_default_stack_array, alloc_type)    \
+    (ErtsWStack) {                                                      \
+        wstack_default_stack_array,  /* start */                        \
+        wstack_default_stack_array,  /* sp */                           \
+        wstack_default_stack_array + DEF_ESTACK_SIZE, /* end */         \
+        wstack_default_stack_array,  /* default */                      \
+        alloc_type /* alloc_type */                                     \
+    }
 
 #define WSTACK_DECLARE(s)				\
     UWord WSTK_DEF_STACK(s)[DEF_WSTACK_SIZE];		\
@@ -527,6 +568,28 @@ do {							\
     }							\
 } while(0)
 #define DESTROY_WSTACK WSTACK_DESTROY
+
+#define DESTROY_WSTACK_EXPLICIT_DEFAULT_ARRAY(s, the_wstack_default_array) \
+    do {                                                                \
+        if ((s).wstart != the_wstack_default_array) {                   \
+            erts_free((s).alloc_type, (s).wstart);                      \
+        }                                                               \
+    } while(0)
+
+#define ENSURE_WSTACK_HEAP_STACK_ARRAY(s, the_wstack_default_array)\
+do {\
+    if ((s).wstart == the_wstack_default_array) {\
+	UWord _wsz = WSTACK_COUNT(s);\
+        UWord *_prev_stack_array = s.wstart;\
+	(s).wstart = erts_alloc((s).alloc_type,                          \
+                                DEF_WSTACK_SIZE * sizeof(UWord));       \
+	sys_memcpy((s).wstart, _prev_stack_array, _wsz*sizeof(UWord));\
+	(s).wsp = (s).wstart + _wsz;\
+	(s).wend = (s).wstart + DEF_WSTACK_SIZE;\
+	(s).alloc_type = (s).alloc_type;\
+    }\
+    (s).wdefault = NULL;\
+ } while (0)
 
 #define WSTACK_DEBUG(s) \
     do { \
@@ -868,7 +931,7 @@ ERTS_GLB_INLINE Eterm erts_equeue_get(ErtsEQueue *q) {
 void erts_emasculate_writable_binary(ProcBin* pb);
 Eterm erts_new_heap_binary(Process *p, byte *buf, int len, byte** datap);
 Eterm erts_new_mso_binary(Process*, byte*, Uint);
-Eterm new_binary(Process*, byte*, Uint);
+Eterm new_binary(Process*, const byte*, Uint);
 Eterm erts_heap_factory_new_binary(ErtsHeapFactory *hfact, byte *buf,
                                    Uint len, Uint reserve_size);
 Eterm erts_realloc_binary(Eterm bin, size_t size);
@@ -889,16 +952,14 @@ void erts_bif_info_init(void);
 
 /* bif.c */
 
-void erts_write_bif_wrapper(Export *export_, BeamInstr *address);
-
 void erts_queue_monitor_message(Process *,
 				ErtsProcLocks*,
 				Eterm,
 				Eterm,
 				Eterm,
 				Eterm);
-void erts_init_trap_export(Export** epp, Eterm m, Eterm f, Uint a,
-			   Eterm (*bif)(Process*, Eterm*, BeamInstr*));
+void erts_init_trap_export(Export* ep, Eterm m, Eterm f, Uint a,
+			   Eterm (*bif)(Process*, Eterm*, ErtsCodePtr));
 void erts_init_bif(void);
 Eterm erl_send(Process *p, Eterm to, Eterm msg);
 int erts_set_group_leader(Process *proc, Eterm new_gl);
@@ -944,10 +1005,10 @@ extern Process *erts_code_purger;
 
 /* beam_load.c */
 typedef struct {
-    ErtsCodeMFA* mfa;		/* Pointer to: Mod, Name, Arity */
-    Uint needed;		/* Heap space needed for entire tuple */
-    Uint32 loc;			/* Location in source code */
-    Eterm* fname_ptr;		/* Pointer to fname table */
+    const ErtsCodeMFA* mfa;     /* Pointer to: Mod, Name, Arity */
+    Uint needed;                /* Heap space needed for entire tuple */
+    Uint32 loc;                 /* Location in source code */
+    const Eterm* fname_ptr;     /* Pointer to fname table */
 } FunctionInfo;
 
 Binary* erts_alloc_loader_state(void);
@@ -968,21 +1029,22 @@ Eterm erts_finish_loading(Binary* loader_state, Process* c_p,
 Eterm erts_preload_module(Process *c_p, ErtsProcLocks c_p_locks,
 			  Eterm group_leader, Eterm* mod, byte* code, Uint size);
 void init_load(void);
-ErtsCodeMFA* erts_find_function_from_pc(BeamInstr* pc);
+const ErtsCodeMFA* erts_find_function_from_pc(ErtsCodePtr pc);
 Eterm* erts_build_mfa_item(FunctionInfo* fi, Eterm* hp,
-			   Eterm args, Eterm* mfa_p);
-void erts_set_current_function(FunctionInfo* fi, ErtsCodeMFA* mfa);
+			   Eterm args, Eterm* mfa_p, Eterm loc_tail);
+void erts_set_current_function(FunctionInfo* fi, const ErtsCodeMFA* mfa);
 Eterm erts_make_stub_module(Process* p, Eterm Mod, Eterm Beam, Eterm Info);
-int erts_commit_hipe_patch_load(Eterm hipe_magic_bin);
 
 /* beam_ranges.c */
 void erts_init_ranges(void);
 void erts_start_staging_ranges(int num_new);
 void erts_end_staging_ranges(int commit);
-void erts_update_ranges(BeamInstr* code, Uint size);
-void erts_remove_from_ranges(BeamInstr* code);
+void erts_update_ranges(const BeamCodeHeader* code, Uint size);
+void erts_remove_from_ranges(const BeamCodeHeader* code);
 UWord erts_ranges_sz(void);
-void erts_lookup_function_info(FunctionInfo* fi, BeamInstr* pc, int full_info);
+void erts_lookup_function_info(FunctionInfo* fi,
+                               ErtsCodePtr pc,
+                               int full_info);
 extern ErtsLiteralArea** erts_dump_lit_areas;
 extern Uint erts_dump_num_lit_areas;
 
@@ -994,7 +1056,7 @@ void process_info(fmtfn_t, void *);
 void print_process_info(fmtfn_t, void *, Process*, ErtsProcLocks);
 void info(fmtfn_t, void *);
 void loaded(fmtfn_t, void *);
-void erts_print_base64(fmtfn_t to, void *to_arg, byte* src, Uint size);
+void erts_print_base64(fmtfn_t to, void *to_arg, const byte* src, Uint size);
 
 /* sighandler sys.c */
 int erts_set_signal(Eterm signal, Eterm type);
@@ -1025,6 +1087,9 @@ typedef struct {
     ErtsAlcType_t queue_alloc_type;
     UWord  bitstore_default[DEF_WSTACK_SIZE];
     UWord* bitstore_start;
+#ifdef DEBUG
+    UWord* bitstore_stop;
+#endif
     ErtsAlcType_t bitstore_alloc_type;
     Eterm  shtable_default[DEF_ESTACK_SIZE];
     Eterm* shtable_start;
@@ -1171,7 +1236,7 @@ void erts_dirty_process_main(ErtsSchedulerData *);
 Eterm build_stacktrace(Process* c_p, Eterm exc);
 Eterm expand_error_value(Process* c_p, Uint freason, Eterm Value);
 void erts_save_stacktrace(Process* p, struct StackTrace* s, int depth);
-BeamInstr *erts_printable_return_address(Process* p, Eterm *E) ERTS_NOINLINE;
+ErtsCodePtr erts_printable_return_address(Process* p, Eterm *E) ERTS_NOINLINE;
 
 /* erl_init.c */
 
@@ -1198,7 +1263,7 @@ extern int erts_initialized;
 extern int erts_compat_rel;
 
 #ifdef BEAMASM
-extern int erts_asm_dump;
+extern int erts_jit_asm_dump;
 #endif
 
 void erl_start(int, char**);
@@ -1288,6 +1353,78 @@ int erts_check_if_stack_grows_downwards(char *ptr) ERTS_NOINLINE;
 
 Eterm store_external_or_ref_in_proc_(Process *, Eterm);
 Eterm store_external_or_ref_(Uint **, ErlOffHeap*, Eterm);
+
+typedef Eterm  (*erts_ycf_continue_fun_t)(long* ycf_number_of_reduction_param,
+                                          void** ycf_trap_state,
+                                          void* ycf_extra_context);
+typedef void (*erts_ycf_destroy_trap_state_fun_t)(void *trap_state);
+typedef Eterm (*erts_ycf_yielding_fun_t)(long* ycf_nr_of_reductions_param,
+                                         void** ycf_trap_state,
+                                         void* ycf_extra_context,
+                                         void* (*ycf_yield_alloc_fun) (size_t,void*),
+                                         void (*ycf_yield_free_fun) (void*,void*),
+                                         void* ycf_yield_alloc_free_context,
+                                         size_t ycf_stack_alloc_size_or_max_size,
+                                         void* ycf_stack_alloc_data,
+                                         Process* p,
+                                         Eterm* bif_args);
+Eterm erts_ycf_trap_driver(Process* p,
+                           Eterm* bif_args,
+                           int nr_of_arguments,
+                           int iterations_per_red,
+                           ErtsAlcType_t memory_allocation_type,
+                           size_t ycf_stack_alloc_size,
+                           int export_entry_index,
+                           erts_ycf_continue_fun_t ycf_continue_fun,
+                           erts_ycf_destroy_trap_state_fun_t ycf_destroy_fun,
+                           erts_ycf_yielding_fun_t ycf_yielding_fun);
+
+/* A quick sort function that is compatible with the qsort function
+   declared in stdlib.h. We need our own so that we can yield inside
+   the function */
+void erts_qsort(void *base,
+                size_t nr_of_items,
+                size_t item_size,
+                int (*compare)(const void *, const void *));
+/* YCF generated functions for yielding of erts_qsort
+   See: $ERL_TOP/erts/emulator/internal_doc/AutomaticYieldingOfCCode.md 
+
+   !!!!
+   Note that the erts_qsort_swap that is used by erts_qsort does
+   not have yielding enabled. If the array items are large erts_qsort
+   should also trap in the erts_qsort_swap function, but this causes
+   terrible performance when the array items are small, so one should
+   investigate a fast-path approach
+*/
+void erts_qsort_ycf_gen_destroy(void* ycf_my_trap_state);
+void  erts_qsort_ycf_gen_continue(long* ycf_number_of_reduction_param,
+                                  void** ycf_trap_state,
+                                  void* ycf_extra_context);
+void erts_qsort_ycf_gen_yielding(long* ycf_nr_of_reductions_param,
+                                 void** ycf_trap_state,
+                                 void* ycf_extra_context,
+                                 void* (*ycf_yield_alloc_fun) (size_t,void*),
+                                 void (*ycf_yield_free_fun) (void*,void*),
+                                 void* ycf_yield_alloc_free_context,
+                                 size_t ycf_stack_alloc_size_or_max_size,
+                                 void* ycf_stack_alloc_data,void *base,
+                                 size_t nr_of_items,
+                                 size_t item_size,
+                                 int (*compare)(const void *, const void *));
+#if defined(DEBUG)
+/*
+ * ycf_debug_get_stack_start is used in YCF's debug mode (see
+ * documentation for the -debug flag of the YCF tool). The function
+ * ycf_debug_set_stack_start sets the value that the function
+ * ycf_debug_get_stack_start returns for the current thread. The
+ * function ycf_debug_reset_stack_start sets the value that the
+ * function ycf_debug_get_stack_start returns to NULL for the current
+ * thread.
+ */
+void ycf_debug_set_stack_start(void * start);
+void ycf_debug_reset_stack_start(void);
+void *ycf_debug_get_stack_start(void);
+#endif
 
 #define NC_HEAP_SIZE(NC) \
  (ASSERT(is_node_container((NC))), \
@@ -1450,6 +1587,7 @@ Eterm collect_memory(Process *);
 void dump_memory_to_fd(int);
 int dump_memory_data(const char *);
 
+Eterm erts_unary_minus(Process* p, Eterm arg1);
 Eterm erts_mixed_plus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_minus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_times(Process* p, Eterm arg1, Eterm arg2);
@@ -1600,7 +1738,7 @@ dtrace_pid_str(Eterm pid, char *process_buf)
                       pid_number(pid),
                       pid_serial(pid));
     else if (is_port(pid))
-        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%lu>",
+        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%b64u>",
                       port_channel_no(pid),
                       port_number(pid));
 }

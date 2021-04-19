@@ -55,6 +55,7 @@ rcv_lingering/1,
 receive_exec_result/1,
 receive_exec_result_or_fail/1,
 receive_exec_end/2,
+receive_exec_end/3,
 receive_exec_result/3,
 failfun/2,
 hostname/0,
@@ -243,8 +244,7 @@ std_simple_sftp(Host, Port, Config, Opts) ->
     Data = crypto:strong_rand_bytes(proplists:get_value(std_simple_sftp_size,Config,10)),
     ok = ssh_sftp:write_file(ChannelRef, DataFile, Data),
     {ok,ReadData} = file:read_file(DataFile),
-    ok = ssh:close(ConnectionRef),
-    Data == ReadData.
+    {Data == ReadData, ConnectionRef}.
 
 %%%----------------------------------------------------------------
 std_simple_exec(Host, Port, Config) ->
@@ -297,17 +297,17 @@ start_shell(Port, IOServer, ExtraOptions) ->
                           ct:log("is_integer(Port) Call ssh:shell(~p, ~p, ~p)",
                                  [Host, Port, Options]),
                           ssh:shell(Host, Port, Options);
-                      Socket when is_port(Socket) ->
-                          receive
-                              start -> ok
-                          end,
-                          ct:log("is_port(Socket) Call ssh:shell(~p, ~p)",
-                                 [Socket, Options]),
-                          ssh:shell(Socket, Options);
                       ConnRef when is_pid(ConnRef) ->
                           ct:log("is_pid(ConnRef) Call ssh:shell(~p)",
                                  [ConnRef]),
-                          ssh:shell(ConnRef) % Options were given in ssh:connect
+                          ssh:shell(ConnRef); % Options were given in ssh:connect
+                      Socket ->
+                          receive
+                              start -> ok
+                          end,
+                          ct:log("Socket Call ssh:shell(~p, ~p)",
+                                 [Socket, Options]),
+                          ssh:shell(Socket, Options)
                   end
               of
                   R ->
@@ -443,10 +443,10 @@ receive_exec_result(Msgs) when is_list(Msgs) ->
                 false ->
                     case Msg of
                         {ssh_cm,_,{data,_,1, Data}} ->
-                            ct:log("~p:~p StdErr: ~p~n", [?MODULE,?FUNCTION_NAME,Data]),
+                            ct:log("~p:~p unexpected StdErr: ~p~n~p~n", [?MODULE,?FUNCTION_NAME,Data,Msg]),
                             receive_exec_result(Msgs);
                         Other ->
-                            ct:log("~p:~p Other ~p", [?MODULE,?FUNCTION_NAME,Other]),
+                            ct:log("~p:~p unexpected Other ~p", [?MODULE,?FUNCTION_NAME,Other]),
                             {unexpected_msg, Other}
                     end
             end
@@ -474,9 +474,12 @@ receive_exec_result_or_fail(Msg) ->
     end.
 
 receive_exec_end(ConnectionRef, ChannelId) ->
+    receive_exec_end(ConnectionRef, ChannelId, 0).
+
+receive_exec_end(ConnectionRef, ChannelId, ExitStatus) ->
     receive_exec_result(
       [{ssh_cm, ConnectionRef, {eof, ChannelId}},
-       {optional, {ssh_cm, ConnectionRef, {exit_status, ChannelId, 0}}},
+       {optional, {ssh_cm, ConnectionRef, {exit_status, ChannelId, ExitStatus}}},
        {ssh_cm, ConnectionRef, {closed, ChannelId}}
       ]).
 

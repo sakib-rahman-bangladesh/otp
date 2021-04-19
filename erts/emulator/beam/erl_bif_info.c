@@ -52,9 +52,6 @@
 #include "erl_time.h"
 #include "erl_proc_sig_queue.h"
 #include "erl_alloc_util.h"
-#ifdef HIPE
-#include "hipe_arch.h"
-#endif
 #include "erl_global_literals.h"
 
 #ifdef ERTS_ENABLE_LOCK_COUNT
@@ -62,8 +59,11 @@
 #endif
 
 #ifdef VALGRIND
-#include <valgrind/valgrind.h>
-#include <valgrind/memcheck.h>
+#  include <valgrind/valgrind.h>
+#  include <valgrind/memcheck.h>
+#endif
+#ifdef ADDRESS_SANITIZER
+#  include <sanitizer/lsan_interface.h>
 #endif
 
 static Export* alloc_info_trap = NULL;
@@ -108,9 +108,6 @@ static char erts_system_version[] = ("Erlang/OTP " ERLANG_OTP_RELEASE
 				     " [jit:no-native-stack]"
 #endif
 #endif
-#ifdef HIPE
-				     " [hipe]"
-#endif	
 #ifdef ET_DEBUG
 #if ET_DEBUG
 				     " [type-assertions]"
@@ -128,11 +125,11 @@ static char erts_system_version[] = ("Erlang/OTP " ERLANG_OTP_RELEASE
 #ifdef ERTS_OPCODE_COUNTER_SUPPORT
 				     " [instruction-counting]"
 #endif
-#ifdef PURIFY
-				     " [purify-compiled]"
-#endif	
 #ifdef VALGRIND
 				     " [valgrind-compiled]"
+#endif
+#ifdef ADDRESS_SANITIZER
+				     " [address-sanitizer]"
 #endif
 #ifdef ERTS_FRMPTR
 				     " [frame-pointer]"
@@ -358,6 +355,7 @@ make_monitor_list(Process *p, int tree, ErtsMonitor *root, Eterm tail)
   -record(erl_link, {
             type, % process | port | dist_process
 	    pid, % Process or port
+            state, % linked | unlinking
             id % (address)
           }).
 */
@@ -366,13 +364,18 @@ static int calc_lnk_size(ErtsLink *lnk, void *vpsz, Sint reds)
 {
     Uint *psz = vpsz;
     Uint sz = 0;
-    ErtsLinkData *ldp = erts_link_to_data(lnk);
+    UWord addr;
 
-    (void) erts_bld_uword(NULL, &sz, (UWord) ldp);
+    if (lnk->type == ERTS_LNK_TYPE_DIST_PROC)
+        addr = (UWord) erts_link_to_elink(lnk);
+    else
+        addr = (UWord) lnk;
+
+    (void) erts_bld_uword(NULL, &sz, (UWord) addr);
 
     *psz += sz;
     *psz += is_immed(lnk->other.item) ? 0 : size_object(lnk->other.item);
-    *psz += 7; /* CONS + 4-tuple */
+    *psz += 8; /* CONS + 5-tuple */
     return 1;
 }
 
@@ -386,10 +389,23 @@ typedef struct {
 static int make_one_lnk_element(ErtsLink *lnk, void * vpllc, Sint reds)
 {
     LnkListContext *pllc = vpllc;
-    Eterm tup, t, pid, id;
-    ErtsLinkData *ldp = erts_link_to_data(lnk);
+    Eterm tup, t, pid, id, state;
+    UWord addr;
+    ERTS_DECL_AM(linked);
+    ERTS_DECL_AM(unlinking);
 
-    id = erts_bld_uword(&pllc->hp, NULL, (UWord) ldp);
+    if (lnk->type == ERTS_LNK_TYPE_DIST_PROC) {
+        ErtsELink *elnk = erts_link_to_elink(lnk);
+        state = elnk->unlinking ? AM_unlinking : AM_linked;
+        addr = (UWord) elnk;
+    }
+    else {
+        ErtsILink *ilnk = (ErtsILink *) lnk;
+        state = ilnk->unlinking ? AM_unlinking : AM_linked;
+        addr = (UWord) ilnk;
+    }
+
+    id = erts_bld_uword(&pllc->hp, NULL, (UWord) addr);
 
     if (is_immed(lnk->other.item))
         pid = lnk->other.item;
@@ -416,8 +432,8 @@ static int make_one_lnk_element(ErtsLink *lnk, void * vpllc, Sint reds)
         break;
     }
 
-    tup = TUPLE4(pllc->hp, pllc->tag, t, pid, id);
-    pllc->hp += 5;
+    tup = TUPLE5(pllc->hp, pllc->tag, t, pid, state, id);
+    pllc->hp += 6;
     pllc->res = CONS(pllc->hp, tup, pllc->res);
     pllc->hp += 2;
     return 1;
@@ -532,6 +548,15 @@ do {							\
 static int collect_one_link(ErtsLink *lnk, void *vmicp, Sint reds)
 {
     MonitorInfoCollection *micp = vmicp;
+    if (lnk->type != ERTS_LNK_TYPE_DIST_PROC) {
+        if (((ErtsILink *) lnk)->unlinking)
+            return 1;
+    }
+    else {
+        ErtsELink *elnk = erts_link_to_elink(lnk);
+        if (elnk->unlinking)
+            return 1;
+    }
     EXTEND_MONITOR_INFOS(micp);
     micp->mi[micp->mi_i].entity.term = lnk->other.item;
     micp->sz += 2 + NC_HEAP_SIZE(lnk->other.item);
@@ -1267,20 +1292,19 @@ send_signal: {
         flags |= ERTS_PI_FLAG_REQUEST_FOR_OTHER;
         need_msgq_len = (flags & ERTS_PI_FLAG_NEED_MSGQ_LEN);
         /*
-         * Set receive mark so we wont have to scan the whole
-         * message queue for the result. Note caller unconditionally
-         * has to enter a receive only matching messages containing
-         * 'ref', or restore save pointer.
+         * Set save pointer to the end of the message queue so we wont
+         * have to scan the whole* message queue for the result. Note
+         * that caller unconditionally has to enter a receive only
+         * matching messages containing 'ref', or restore save pointer.
          */
-        ERTS_RECV_MARK_SAVE(c_p);
-        ERTS_RECV_MARK_SET(c_p);
+        erts_msgq_set_save_end(c_p);
         enqueued = erts_proc_sig_send_process_info_request(c_p, pid, item_ix,
                                                            len, need_msgq_len,
                                                            flags, reserve_size,
                                                            ref);
         if (!enqueued) {
             /* Restore save pointer... */
-	    JOIN_MESSAGE(c_p);
+	    erts_msgq_set_save_first(c_p);
             goto undefined;
         }
         ERTS_BIF_PREP_TRAP1(ret, erts_await_result, c_p, ref);
@@ -1771,6 +1795,8 @@ process_info_aux(Process *c_p,
             ErtsMessage *mp;
             ASSERT(flags & ERTS_PI_FLAG_NEED_MSGQ_LEN);
             for (mp = rp->sig_qs.first; mp; mp = mp->next) {
+		if (ERTS_SIG_IS_RECV_MARKER(mp))
+		    continue;
                 ASSERT(ERTS_SIG_IS_MSG(mp));
                 if (mp->data.attached)
                     total_heap_size += erts_msg_attached_data_size(mp);
@@ -2029,7 +2055,7 @@ current_function(Process *c_p, ErtsHeapFactory *hfact, Process* rp,
     }
 
     if (c_p == rp && !(flags & ERTS_PI_FLAG_REQUEST_FOR_OTHER)) {
-        BeamInstr* return_address;
+        ErtsCodePtr return_address;
         FunctionInfo caller_fi;
 
         /*
@@ -2055,7 +2081,7 @@ current_function(Process *c_p, ErtsHeapFactory *hfact, Process* rp,
 	res = am_undefined;
     } else if (full_info) {
         hp = erts_produce_heap(hfact, fi.needed, reserve_size);
-	erts_build_mfa_item(&fi, hp, am_true, &res);
+        erts_build_mfa_item(&fi, hp, am_true, &res, NIL);
     } else {
         hp = erts_produce_heap(hfact, 4, reserve_size);
 	res = TUPLE3(hp, rp->current->module,
@@ -2081,7 +2107,7 @@ current_stacktrace(Process *p, ErtsHeapFactory *hfact, Process* rp,
     Eterm res = NIL;
 
     depth = erts_backtrace_depth;
-    sz = offsetof(struct StackTrace, trace) + sizeof(BeamInstr *)*depth;
+    sz = offsetof(struct StackTrace, trace) + sizeof(ErtsCodePtr) * depth;
     s = (struct StackTrace *) erts_alloc(ERTS_ALC_T_TMP, sz);
     s->depth = 0;
     s->pc = NULL;
@@ -2118,7 +2144,7 @@ current_stacktrace(Process *p, ErtsHeapFactory *hfact, Process* rp,
         sz = stkp->needed + 2;
         ERTS_PI_UNRESERVE(reserve_size, sz);
         hp = erts_produce_heap(hfact, sz, reserve_size);
-	hp = erts_build_mfa_item(stkp, hp, am_true, &mfa);
+        hp = erts_build_mfa_item(stkp, hp, am_true, &mfa, NIL);
 	res = CONS(hp, mfa, res);
     }
 
@@ -2126,6 +2152,28 @@ current_stacktrace(Process *p, ErtsHeapFactory *hfact, Process* rp,
     erts_free(ERTS_ALC_T_TMP, s);
     return res;
 }
+
+#if defined(VALGRIND) || defined(ADDRESS_SANITIZER)
+static int iolist_to_tmp_buf(Eterm iolist, char** bufp)
+{
+    ErlDrvSizeT buf_size = 1024; /* Try with 1KB first */
+    char *buf = erts_alloc(ERTS_ALC_T_TMP, buf_size);
+    ErlDrvSizeT r = erts_iolist_to_buf(iolist, (char*) buf, buf_size - 1);
+    if (ERTS_IOLIST_TO_BUF_FAILED(r)) {
+        erts_free(ERTS_ALC_T_TMP, (void *) buf);
+        if (erts_iolist_size(iolist, &buf_size)) {
+            return 0;
+        }
+        buf_size++;
+        buf = erts_alloc(ERTS_ALC_T_TMP, buf_size);
+        r = erts_iolist_to_buf(iolist, (char*) buf, buf_size - 1);
+        ASSERT(r == buf_size - 1);
+    }
+    buf[buf_size - 1 - r] = '\0';
+    *bufp = buf;
+    return 1;
+}
+#endif
 
 /*
  * This function takes care of calls to erlang:system_info/1 when the argument
@@ -2189,78 +2237,72 @@ info_1_tuple(Process* BIF_P,	/* Pointer to current process. */
 	    goto badarg;
 	ERTS_BIF_PREP_TRAP1(ret, erts_format_cpu_topology_trap, BIF_P, res);
 	return ret;
-#if defined(PURIFY) || defined(VALGRIND)
-    } else if (ERTS_IS_ATOM_STR("error_checker", sel)
-#if defined(PURIFY)
-	       || sel == am_purify
-#elif defined(VALGRIND)
-	       || ERTS_IS_ATOM_STR("valgrind", sel)
+    } else if (ERTS_IS_ATOM_STR("memory_checker", sel)) {
+        if (arity == 2 && ERTS_IS_ATOM_STR("test_leak", *tp)) {
+#if defined(VALGRIND) || defined(ADDRESS_SANITIZER)
+            erts_alloc(ERTS_ALC_T_HEAP , 100);
 #endif
-	) {
-	if (*tp == am_memory) {
-#if defined(PURIFY)
-	    BIF_RET(erts_make_integer(purify_new_leaks(), BIF_P));
-#elif defined(VALGRIND)
-#  ifdef VALGRIND_DO_ADDED_LEAK_CHECK
-	    VALGRIND_DO_ADDED_LEAK_CHECK;
-#  else
-	    VALGRIND_DO_LEAK_CHECK;
+            BIF_RET(am_ok);
+        }
+        else if (arity == 2 && ERTS_IS_ATOM_STR("test_overflow", *tp)) {
+            static int test[2];
+            BIF_RET(make_small(test[2]));
+        }
+#if defined(VALGRIND) || defined(ADDRESS_SANITIZER)
+	if (arity == 2 && *tp == am_running) {
+#  if defined(VALGRIND)
+	    if (RUNNING_ON_VALGRIND)
+		BIF_RET(ERTS_MAKE_AM("valgrind"));
+#  elif defined(ADDRESS_SANITIZER)
+	    BIF_RET(ERTS_MAKE_AM("asan"));
 #  endif
-	    BIF_RET(make_small(0));
-#endif
-	} else if (*tp == am_fd) {
-#if defined(PURIFY)
-	    BIF_RET(erts_make_integer(purify_new_fds_inuse(), BIF_P));
-#elif defined(VALGRIND)
-	    /* Not present in valgrind... */
-	    BIF_RET(make_small(0));
-#endif
-	} else if (*tp == am_running) {
-#if defined(PURIFY)
-	    BIF_RET(purify_is_running() ? am_true : am_false);
-#elif defined(VALGRIND)
-	    BIF_RET(RUNNING_ON_VALGRIND ? am_true : am_false);
-#endif
-	} else if (is_list(*tp)) {
-#if defined(PURIFY)
-#  define ERTS_ERROR_CHECKER_PRINTF purify_printf
-#elif defined(VALGRIND)
-#  define ERTS_ERROR_CHECKER_PRINTF VALGRIND_PRINTF
-#endif
-	    ErlDrvSizeT buf_size = 8*1024; /* Try with 8KB first */
-	    char *buf = erts_alloc(ERTS_ALC_T_TMP, buf_size);
-	    ErlDrvSizeT r = erts_iolist_to_buf(*tp, (char*) buf, buf_size - 1);
-	    if (ERTS_IOLIST_TO_BUF_FAILED(r)) {
-		erts_free(ERTS_ALC_T_TMP, (void *) buf);
-		if (erts_iolist_size(*tp, &buf_size)) {
-		    goto badarg;
-		}
-		buf_size++;
-		buf = erts_alloc(ERTS_ALC_T_TMP, buf_size);
-		r = erts_iolist_to_buf(*tp, (char*) buf, buf_size - 1);
-		ASSERT(r == buf_size - 1);
-	    }
-	    buf[buf_size - 1 - r] = '\0';
-            ERTS_ERROR_CHECKER_PRINTF("%s\n", buf);
+	}
+	else if (arity == 2 && ERTS_IS_ATOM_STR("check_leaks", *tp)) {
+#  if defined(VALGRIND)
+#    ifdef VALGRIND_DO_ADDED_LEAK_CHECK
+	    VALGRIND_DO_ADDED_LEAK_CHECK;
+#    else
+	    VALGRIND_DO_LEAK_CHECK;
+#    endif
+	    BIF_RET(am_ok);
+#  elif defined(ADDRESS_SANITIZER)
+	    __lsan_do_recoverable_leak_check();
+	    BIF_RET(am_ok);
+#  endif
+        }
+#  if defined(VALGRIND)
+	if (arity == 3 && tp[0] == am_print && is_list(tp[1])) {
+            char* buf;
+            if (!iolist_to_tmp_buf(tp[1], &buf))
+                goto badarg;
+            VALGRIND_PRINTF("%s\n", buf);
 	    erts_free(ERTS_ALC_T_TMP, (void *) buf);
 	    BIF_RET(am_true);
-#undef ERTS_ERROR_CHECKER_PRINTF
 	}
-#endif
-#ifdef QUANTIFY
-    } else if (sel == am_quantify) {
-	if (*tp == am_clear) {
-	    quantify_clear_data();
-	    BIF_RET(am_true);
-	} else if (*tp == am_start) {
-	    quantify_start_recording_data();
-	    BIF_RET(am_true);
-	} else if (*tp == am_stop) {
-	    quantify_stop_recording_data();
-	    BIF_RET(am_true);
-	} else if (*tp == am_running) {
-	    BIF_RET(quantify_is_running() ? am_true : am_false);
-	}
+#  endif
+#  if defined(ADDRESS_SANITIZER)
+        if (arity == 3 && ERTS_IS_ATOM_STR("log",tp[0]) && is_list(tp[1])) {
+            static char *active_log = NULL;
+            static int active_log_len;
+            Eterm ret = NIL;
+            char* buf;
+            if (!iolist_to_tmp_buf(tp[1], &buf))
+                goto badarg;
+            erts_rwmtx_rwlock(&erts_dist_table_rwmtx); /* random lock abuse */
+            __sanitizer_set_report_path(buf);
+            if (active_log) {
+                Eterm *hp = HAlloc(BIF_P, 2 * active_log_len);
+                ret = erts_bld_string_n(&hp, 0, active_log, active_log_len);
+                erts_free(ERTS_ALC_T_DEBUG, active_log);
+            }
+            active_log_len = sys_strlen(buf);
+            active_log = erts_alloc(ERTS_ALC_T_DEBUG, active_log_len + 1);
+            sys_memcpy(active_log, buf, active_log_len + 1);
+            erts_rwmtx_rwunlock(&erts_dist_table_rwmtx);
+            erts_free(ERTS_ALC_T_TMP, (void *) buf);
+            BIF_RET(ret);
+        }
+#  endif
 #endif
 #if defined(__GNUC__) && defined(HAVE_SOLARIS_SPARC_PERFMON)
     } else if (ERTS_IS_ATOM_STR("ultrasparc_set_pcr", sel)) {
@@ -2451,21 +2493,15 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 #if defined(DEBUG)
 	ERTS_DECL_AM(debug);
 	BIF_RET(AM_debug);
-#elif defined(PURIFY)
-	ERTS_DECL_AM(purify);
-	BIF_RET(AM_purify);
-#elif defined(QUANTIFY)
-	ERTS_DECL_AM(quantify);
-	BIF_RET(AM_quantify);
-#elif defined(PURECOV)
-	ERTS_DECL_AM(purecov);
-	BIF_RET(AM_purecov);
 #elif defined(ERTS_GCOV)
 	ERTS_DECL_AM(gcov);
 	BIF_RET(AM_gcov);
 #elif defined(VALGRIND)
 	ERTS_DECL_AM(valgrind);
 	BIF_RET(AM_valgrind);
+#elif defined(ADDRESS_SANITIZER)
+	ERTS_DECL_AM(asan);
+	BIF_RET(AM_asan);
 #elif defined(GPROF)
 	ERTS_DECL_AM(gprof);
 	BIF_RET(AM_gprof);
@@ -2533,12 +2569,8 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     } else if (BIF_ARG_1 == am_allocated_areas) {
 	res = erts_allocated_areas(NULL, NULL, BIF_P);
 	BIF_RET(res);
-    } else if (BIF_ARG_1 == am_hipe_architecture) {
-#if defined(HIPE)
-	BIF_RET(hipe_arch_name);
-#else
+    } else if (ERTS_IS_ATOM_STR("hipe_architecture", BIF_ARG_1)) {
 	BIF_RET(am_undefined);
-#endif
     } else if (BIF_ARG_1 == am_trace_control_word) {
 	BIF_RET(db_get_trace_control_word(BIF_P));
     } else if (ERTS_IS_ATOM_STR("ets_realloc_moves", BIF_ARG_1)) {
@@ -3544,9 +3576,12 @@ fun_info_2(BIF_ALIST_2)
 	    val = make_small(funp->arity);
 	    break;
 	case am_name:
-	    hp = HAlloc(p, 3);
-	    val = funp->fe->address[-2];
-	    break;
+            {
+                const ErtsCodeMFA *mfa = erts_code_to_codemfa((funp->fe)->address);
+                hp = HAlloc(p, 3);
+                val = mfa->function;
+            }
+            break;
 	default:
 	    goto error;
 	}
@@ -3615,9 +3650,16 @@ fun_info_mfa_1(BIF_ALIST_1)
     Eterm* hp;
 
     if (is_fun(fun)) {
-	ErlFunThing* funp = (ErlFunThing *) fun_val(fun);
-	hp = HAlloc(p, 4);
-	BIF_RET(TUPLE3(hp,funp->fe->module,funp->fe->address[-2],make_small(funp->arity)));
+        const ErtsCodeMFA *mfa;
+        ErlFunThing* funp;
+        funp = (ErlFunThing *) fun_val(fun);
+        mfa = erts_code_to_codemfa((funp->fe)->address);
+
+        hp = HAlloc(p, 4);
+        BIF_RET(TUPLE3(hp,
+                       (funp->fe)->module,
+                       mfa->function,
+                       make_small(funp->arity)));
     } else if (is_export(fun)) {
 	Export* exp = (Export *) ((UWord) (export_val(fun))[1]);
 	hp = HAlloc(p, 4);
@@ -3699,7 +3741,7 @@ BIF_RETTYPE erts_internal_process_display_2(BIF_ALIST_2)
     Eterm res;
 
     if (BIF_ARG_2 != am_backtrace)
-        BIF_RET(am_badarg);
+        BIF_RET(am_badopt);
 
     if (BIF_P->common.id == BIF_ARG_1) {
         res = process_display(BIF_P, NULL, NULL, NULL);
@@ -4466,8 +4508,6 @@ BIF_RETTYPE erts_internal_system_check_1(BIF_ALIST_1)
     BIF_ERROR(BIF_P, BADARG);
 }
 
-static erts_atomic_t hipe_test_reschedule_flag;
-
 #if defined(VALGRIND) && defined(__GNUC__)
 /* Force noinline for valgrind suppression */
 static void broken_halt_test(Eterm bif_arg_2) __attribute__((noinline));
@@ -4480,6 +4520,28 @@ static void broken_halt_test(Eterm bif_arg_2)
     erts_get_scheduler_data()->run_queue = NULL;
 #endif
     erts_exit(ERTS_DUMP_EXIT, "%T", bif_arg_2);
+}
+
+static void
+test_multizero_timeout_in_timeout3(void *vproc)
+{
+    Process *proc = (Process *) vproc;
+    ErtsMessage *mp = erts_alloc_message(0, NULL);
+    ERTS_DECL_AM(multizero_timeout_in_timeout_done);
+    erts_queue_message(proc, 0, mp, AM_multizero_timeout_in_timeout_done, am_system);
+    erts_proc_dec_refc(proc);
+}
+
+static void
+test_multizero_timeout_in_timeout2(void *vproc)
+{
+    erts_start_timer_callback(0, test_multizero_timeout_in_timeout3, vproc);
+}
+
+static void
+test_multizero_timeout_in_timeout(void *vproc)
+{
+    erts_start_timer_callback(0, test_multizero_timeout_in_timeout2, vproc);
 }
 
 BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
@@ -4674,30 +4736,6 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
 		BIF_RET(make_small(max_loops));
 	    }
 	}
-	else if (ERTS_IS_ATOM_STR("hipe_test_reschedule_suspend", BIF_ARG_1)) {
-	    /* Used by hipe test suites */
-	    erts_aint_t flag = erts_atomic_read_nob(&hipe_test_reschedule_flag);
-	    if (!flag && BIF_ARG_2 != am_false) {
-		erts_atomic_set_nob(&hipe_test_reschedule_flag, 1);
-		erts_suspend(BIF_P, ERTS_PROC_LOCK_MAIN, NULL);
-		ERTS_BIF_YIELD2(BIF_TRAP_EXPORT(BIF_erts_debug_set_internal_state_2),
-				BIF_P, BIF_ARG_1, BIF_ARG_2);
-	    }
-	    erts_atomic_set_nob(&hipe_test_reschedule_flag, !flag);
-	    BIF_RET(NIL);
-	}
-	else if (ERTS_IS_ATOM_STR("hipe_test_reschedule_resume", BIF_ARG_1)) {
-	    /* Used by hipe test suites */
-	    Eterm res = am_false;
-	    Process *rp = erts_pid2proc(BIF_P, ERTS_PROC_LOCK_MAIN,
-					BIF_ARG_2, ERTS_PROC_LOCK_STATUS);
-	    if (rp) {
-		erts_resume(rp, ERTS_PROC_LOCK_STATUS);
-		res = am_true;
-		erts_proc_unlock(rp, ERTS_PROC_LOCK_STATUS);
-	    }
-	    BIF_RET(res);
-	}
 	else if (ERTS_IS_ATOM_STR("test_long_gc_sleep", BIF_ARG_1)) {
 	    if (term_to_Uint(BIF_ARG_2, &erts_test_long_gc_sleep) > 0)
 		BIF_RET(am_true);
@@ -4861,6 +4899,18 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
             case am_false:
                 erts_release_code_write_permission();
                 BIF_RET(am_true);
+            }
+        }
+        else if (ERTS_IS_ATOM_STR("multizero_timeout_in_timeout", BIF_ARG_1)) {
+            Sint64 timeout;
+            if (term_to_Sint64(BIF_ARG_2, &timeout)) {
+                if (timeout < 0)
+                    timeout = 0;
+                erts_proc_inc_refc(BIF_P);
+                erts_start_timer_callback((ErtsMonotonicTime) timeout,
+                                          test_multizero_timeout_in_timeout,
+                                          (void *) BIF_P);
+                BIF_RET(am_ok);
             }
         }
     }
@@ -5115,7 +5165,7 @@ BIF_RETTYPE erts_internal_gather_carrier_info_1(BIF_ALIST_1)
 /* Builds a list of all functions in the given module:
  *     [{Name, Arity},...] */
 static Eterm
-functions_in_module(Process* p, BeamCodeHeader* code_hdr)
+functions_in_module(Process* p, const BeamCodeHeader* code_hdr)
 {
     int i;
     Uint num_functions;
@@ -5129,7 +5179,7 @@ functions_in_module(Process* p, BeamCodeHeader* code_hdr)
     hp = HAlloc(p, need);
     hp_end = hp + need;
     for (i = num_functions-1; i >= 0 ; i--) {
-        ErtsCodeInfo* ci = code_hdr->functions[i];
+        const ErtsCodeInfo* ci = code_hdr->functions[i];
         Eterm tuple;
 
         /*
@@ -5189,52 +5239,17 @@ nifs_in_module(Process* p, Eterm module)
 
 /* Returns 'true' if mod has any native compiled functions, otherwise 'false' */
 static Eterm
-has_native(BeamCodeHeader *code_hdr)
+has_native(const BeamCodeHeader *code_hdr)
 {
-    Eterm result = am_false;
-#ifdef HIPE
-    if (erts_is_module_native(code_hdr)) {
-        result = am_true;
-    }
-#endif
-    return result;
+    return am_false;
 }
 
 /* Builds a list of all functions including native addresses.
  *     [{Name,Arity,NativeAddress},...] */
 static Eterm
-native_addresses(Process* p, BeamCodeHeader* code_hdr)
+native_addresses(Process* p, const BeamCodeHeader* code_hdr)
 {
-    Eterm result = NIL;
-#ifdef HIPE
-    int i;
-    Eterm* hp;
-    Uint num_functions;
-    Uint need;
-    Eterm* hp_end;
-
-    num_functions = code_hdr->num_functions;
-    need = (6+BIG_UINT_HEAP_SIZE)*num_functions;
-    hp = HAlloc(p, need);
-    hp_end = hp + need;
-    for (i = num_functions-1; i >= 0 ; i--) {
-        ErtsCodeInfo *ci = code_hdr->functions[i];
-        Eterm tuple;
-
-        ASSERT(is_atom(ci->mfa.function)
-               || is_nil(ci->mfa.function)); /* [] if BIF stub */
-        if (ci->u.ncallee != NULL) {
-            Eterm addr;
-            ASSERT(is_atom(ci->mfa.function));
-            addr = erts_bld_uint(&hp, NULL, (Uint)ci->u.ncallee);
-            tuple = erts_bld_tuple(&hp, NULL, 3, ci->mfa.function,
-                                   make_small(ci->mfa.arity), addr);
-            result = erts_bld_cons(&hp, NULL, tuple, result);
-        }
-    }
-    HRelease(p, hp_end, hp);
-#endif
-    return result;
+    return NIL;
 }
 
 /* Builds a list of all exported functions in the given module:
@@ -5254,7 +5269,7 @@ exported_from_module(Process* p, ErtsCodeIndex code_ix, Eterm mod)
         if (ep->info.mfa.module == mod) {
             Eterm tuple;
 
-            if (ep->addressv[code_ix] == ep->trampoline.raw &&
+            if (erts_is_export_trampoline_active(ep, code_ix) &&
                 BeamIsOpCode(ep->trampoline.common.op, op_call_error_handler)) {
                 /* There is a call to the function, but it does not exist. */ 
                 continue;
@@ -5281,7 +5296,7 @@ exported_from_module(Process* p, ErtsCodeIndex code_ix, Eterm mod)
 
 /* Returns a list of all attributes for the module. */
 static Eterm
-attributes_for_module(Process* p, BeamCodeHeader* code_hdr)
+attributes_for_module(Process* p, const BeamCodeHeader* code_hdr)
 {
     const byte* ext;
     Eterm result = NIL;
@@ -5304,7 +5319,7 @@ attributes_for_module(Process* p, BeamCodeHeader* code_hdr)
 
 /* Returns a list containing compilation information. */
 static Eterm
-compilation_info_for_module(Process* p, BeamCodeHeader* code_hdr)
+compilation_info_for_module(Process* p, const BeamCodeHeader* code_hdr)
 {
     const byte* ext;
     Eterm result = NIL;
@@ -5328,13 +5343,14 @@ compilation_info_for_module(Process* p, BeamCodeHeader* code_hdr)
 
 /* Returns the MD5 checksum for a module */
 static Eterm
-md5_of_module(Process* p, BeamCodeHeader* code_hdr)
+md5_of_module(Process* p, const BeamCodeHeader* code_hdr)
 {
     return new_binary(p, code_hdr->md5_ptr, MD5_SIZE);
 }
 
 static Eterm
-get_module_info(Process* p, ErtsCodeIndex code_ix, BeamCodeHeader* code_hdr,
+get_module_info(Process* p, ErtsCodeIndex code_ix,
+                const BeamCodeHeader* code_hdr,
                 Eterm module, Eterm what)
 {
     if (what == am_module) {
@@ -5365,7 +5381,7 @@ module_info_0(Process* p, Eterm module)
 {
     Module* modp;
     ErtsCodeIndex code_ix = erts_active_code_ix();
-    BeamCodeHeader* code_hdr;
+    const BeamCodeHeader* code_hdr;
     Eterm *hp;
     Eterm list = NIL;
     Eterm tup;
@@ -5392,9 +5408,6 @@ module_info_0(Process* p, Eterm module)
     list = CONS(hp, tup, list)
 
     BUILD_INFO(am_md5);
-#ifdef HIPE
-    BUILD_INFO(am_native);
-#endif
     BUILD_INFO(am_compile);
     BUILD_INFO(am_attributes);
     BUILD_INFO(am_exports);
@@ -5408,7 +5421,7 @@ module_info_1(Process* p, Eterm module, Eterm what)
 {
     Module* modp;
     ErtsCodeIndex code_ix = erts_active_code_ix();
-    BeamCodeHeader* code_hdr;
+    const BeamCodeHeader* code_hdr;
 
     if (is_not_atom(module)) {
         return THE_NON_VALUE;
@@ -5864,7 +5877,6 @@ void
 erts_bif_info_init(void)
 {
     erts_atomic_init_nob(&available_internal_state, 0);
-    erts_atomic_init_nob(&hipe_test_reschedule_flag, 0);
 
     alloc_info_trap = erts_export_put(am_erlang, am_alloc_info, 1);
     alloc_sizes_trap = erts_export_put(am_erlang, am_alloc_sizes, 1);

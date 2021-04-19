@@ -756,7 +756,8 @@ rbt_delete(RBTree* tree, RBTNode* del)
 	y = z;
     else
 	/* Set y to z:s successor */
-	for(y = z->right; y->left; y = y->left);
+	for(y = z->right; y->left; y = y->left)
+            ;
     /* splice out y */
     x = y->left ? y->left : y->right;
     spliced_is_black = IS_BLACK(y);
@@ -1835,7 +1836,7 @@ void *
 erts_mremap(ErtsMemMapper* mm,
             Uint32 flags, void *ptr, UWord old_size, UWord *sizep)
 {
-    void *new_ptr;
+    void *new_ptr = NULL;
     Uint32 superaligned;
     UWord asize;
 
@@ -1895,9 +1896,9 @@ erts_mremap(ErtsMemMapper* mm,
 	}
 #endif
 #ifdef ERTS_HAVE_OS_MREMAP
-	if (superaligned)
+	if (superaligned) {
 	    return remap_move(mm, flags, new_ptr, old_size, sizep);
-	else {
+	} else {
 	    new_ptr = os_mremap(ptr, old_size, asize, 0);
 	    if (!new_ptr)
 		return NULL;
@@ -2153,13 +2154,18 @@ void
 erts_mmap_init(ErtsMemMapper* mm, ErtsMMapInit *init)
 {
     static int is_first_call = 1;
-    int virtual_map = 0;
     char *start = NULL, *end = NULL;
     UWord pagesize;
+    int virtual_map = 0;
+
+    (void)virtual_map;
+
 #if defined(__WIN32__)
-    SYSTEM_INFO sysinfo;
-    GetSystemInfo(&sysinfo);
-    pagesize = (UWord) sysinfo.dwPageSize;
+    {
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        pagesize = (UWord) sysinfo.dwPageSize;
+    }
 #elif defined(_SC_PAGESIZE)
     pagesize = (UWord) sysconf(_SC_PAGESIZE);
 #elif defined(HAVE_GETPAGESIZE)

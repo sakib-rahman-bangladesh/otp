@@ -27,10 +27,10 @@
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
+#include "global.h"
 #define ERTS_PTAB_WANT_BIF_IMPL__
 #define ERTS_PTAB_WANT_DEBUG_FUNCS__
 #include "erl_ptab.h"
-#include "global.h"
 #include "erl_binary.h"
 
 typedef struct ErtsPTabListBifData_ ErtsPTabListBifData;
@@ -237,7 +237,7 @@ struct ErtsPTabDeletedElement_ {
     } u;
 };
 
-static Export *ptab_list_continue_export;
+static Export ptab_list_continue_export;
 
 typedef struct {
     Uint64 interval;
@@ -780,7 +780,7 @@ erts_ptab_list(Process *c_p, ErtsPTab *ptab)
 	ERTS_PTAB_LIST_DBG_VERIFY_HEAP_ALLOC_USED(ptlbdp, hp);
 	ERTS_PTAB_LIST_DBG_TRACE(c_p->common.id, trap);
 	ERTS_BIF_PREP_YIELD2(ret_val,
-			     ptab_list_continue_export,
+			     &ptab_list_continue_export,
 			     c_p,
 			     res_acc,
 			     magic_ref);
@@ -974,7 +974,7 @@ ptab_list_bif_engine(Process *c_p, Eterm *res_accp, Binary *mbp)
 	    if (cix != 0)
 		ptlbdp->chunk[cix].interval
 		    = erts_step_interval_nob(erts_ptab_interval(ptab));
-	    else if (ptlbdp->bif_invocation)
+	    else if (invocation_interval_p)
 		ptlbdp->chunk[0].interval = *invocation_interval_p;
 	    /* else: interval is irrelevant */
 
@@ -1304,7 +1304,7 @@ static BIF_RETTYPE ptab_list_continue(BIF_ALIST_2)
     }
     else {
 	ERTS_PTAB_LIST_DBG_TRACE(BIF_P->common.id, trap);
-	ERTS_BIF_YIELD2(ptab_list_continue_export, BIF_P, res_acc, BIF_ARG_2);
+	ERTS_BIF_YIELD2(&ptab_list_continue_export, BIF_P, res_acc, BIF_ARG_2);
     }
 }
 

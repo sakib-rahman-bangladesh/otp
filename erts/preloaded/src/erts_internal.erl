@@ -51,7 +51,8 @@
 
 -export([purge_module/2]).
 
--export([flush_monitor_messages/3]).
+-export([flush_monitor_messages/3,
+         '@flush_monitor_messages_refopt'/0]).
 
 -export([await_result/1, gather_io_bytes/2]).
 
@@ -324,14 +325,15 @@ check_process_code(Pid, Module, OptionList)  ->
 	    end
     end.
 
-% gets async opt and verify valid option list
+%% gets async opt and verify valid option list
 get_cpc_opts([{async, _ReqId} = AsyncTuple | Options], _OldAsync) ->
     get_cpc_opts(Options, AsyncTuple);
-get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when AllowGC == true;
-							  AllowGC == false ->
+get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when is_boolean(AllowGC) ->
     get_cpc_opts(Options, Async);
 get_cpc_opts([], Async) ->
-    Async.
+    Async;
+get_cpc_opts(_, _) ->
+    error(bad_option).
 
 -spec check_dirty_process_code(Pid, Module) -> Result when
       Result :: boolean() | 'normal' | 'busy',
@@ -463,6 +465,18 @@ flush_monitor_messages(Ref, Multi, Res) when is_reference(Ref) ->
 	    Res
     end.
 
+-spec '@flush_monitor_messages_refopt'() -> ok.
+'@flush_monitor_messages_refopt'() ->
+    %% Enables reference optimization in flush_monitor_messages/3. Note that we
+    %% both body- and tail-call it to ensure that the reference isn't cleared,
+    %% in case the caller to demonitor/2 wants to continue using it.
+    %%
+    %% This never actually runs and is only used to trigger the optimization,
+    %% see the module comment in beam_ssa_recv for details.
+    Ref = make_ref(),
+    flush_monitor_messages(Ref, true, ok),
+    flush_monitor_messages(Ref, true, ok).
+
 -spec erts_internal:time_unit() -> pos_integer().
 
 time_unit() ->
@@ -510,7 +524,7 @@ microstate_accounting(Ref, Threads) ->
                    | existing | existing_processes | existing_ports
                    | new | new_processes | new_ports,
       How :: boolean(),
-      FlagList :: [].
+      FlagList :: list().
 trace(_PidSpec, _How, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -526,7 +540,7 @@ trace(_PidSpec, _How, _FlagList) ->
                  | boolean()
                  | restart
                  | pause,
-      FlagList :: [ ].
+      FlagList :: list().
 trace_pattern(_MFA, _MatchSpec, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -848,7 +862,7 @@ get_internal_state_blocked(Arg) ->
       Function :: atom(),
       Args :: [term()],
       Opts :: [term()],
-      Res :: reference() | 'badarg'.
+      Res :: reference() | 'badarg' | 'badopt'.
 
 spawn_request(_Module, _Function, _Args, _Opts) ->
     erlang:nif_error(undef).

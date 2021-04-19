@@ -32,7 +32,7 @@ extern Export *erts_convert_time_unit_trap;
 
 #define BIF_P A__p
 
-#define BIF_ALIST Process* A__p, Eterm* BIF__ARGS, BeamInstr *A__I
+#define BIF_ALIST Process* A__p, Eterm* BIF__ARGS, ErtsCodePtr A__I
 #define BIF_CALL_ARGS A__p, BIF__ARGS, A__I
 
 #define BIF_ALIST_0 BIF_ALIST
@@ -310,138 +310,140 @@ do {								\
     (Ret) = THE_NON_VALUE;					\
 } while (0)
 
-#define ERTS_BIF_PREP_TRAP0(Ret, Trap, Proc)	\
-do {						\
-    (Proc)->arity = 0;				\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]);	\
-    (Proc)->freason = TRAP;			\
-    (Ret) = THE_NON_VALUE;			\
-} while (0)
 
-#define ERTS_BIF_PREP_TRAP1(Ret, Trap, Proc, A0)		\
-do {								\
-    Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;	\
-    (Proc)->arity = 1;						\
-    reg[0] = (Eterm) (A0);					\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]); \
-    (Proc)->freason = TRAP;					\
-    (Ret) = THE_NON_VALUE;					\
-} while (0)
+#ifdef BEAMASM
 
-#define ERTS_BIF_PREP_TRAP2(Ret, Trap, Proc, A0, A1)		\
-do {								\
-    Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;	\
-    (Proc)->arity = 2;						\
-    reg[0] = (Eterm) (A0);					\
-    reg[1] = (Eterm) (A1);					\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]); \
-    (Proc)->freason = TRAP;					\
-    (Ret) = THE_NON_VALUE;					\
-} while (0)
+/* See `emit_bif_export_trap` for details. */
+extern ErtsCodePtr beam_bif_export_trap;
+#define ERTS_BIF_PREP_TRAP(Export, Proc, Arity)                               \
+    do {                                                                      \
+        (Proc)->i = beam_bif_export_trap;                                     \
+        (Proc)->arity = (Arity);                                              \
+        (Proc)->freason = TRAP;                                               \
+        (Proc)->current = &(Export)->info.mfa;                                \
+    } while(0);
 
-#define ERTS_BIF_PREP_TRAP3(Ret, Trap, Proc, A0, A1, A2)	\
-do {								\
-    Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;	\
-    (Proc)->arity = 3;						\
-    reg[0] = (Eterm) (A0);					\
-    reg[1] = (Eterm) (A1);					\
-    reg[2] = (Eterm) (A2);					\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]); \
-    (Proc)->freason = TRAP;					\
-    (Ret) = THE_NON_VALUE;					\
-} while (0)
+#else /* defined(BEAMASM) */
 
-#define ERTS_BIF_PREP_TRAP4(Ret, Trap, Proc, A0, A1, A2, A3)	\
-do {								\
-    Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;	\
-    (Proc)->arity = 4;						\
-    reg[0] = (Eterm) (A0);					\
-    reg[1] = (Eterm) (A1);					\
-    reg[2] = (Eterm) (A2);					\
-    reg[3] = (Eterm) (A3);					\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]); \
-    (Proc)->freason = TRAP;					\
-    (Ret) = THE_NON_VALUE;					\
-} while (0)
+#define ERTS_BIF_PREP_TRAP(Export, Proc, Arity)                               \
+    do {                                                                      \
+        (Proc)->i = (Export)->addresses[erts_active_code_ix()];               \
+        (Proc)->arity = (Arity);                                              \
+        (Proc)->freason = TRAP;                                               \
+    } while(0);
 
-#define ERTS_BIF_PREP_TRAP3_NO_RET(Trap, Proc, A0, A1, A2)\
-do {							\
-    Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;	\
-    (Proc)->arity = 3;					\
-    reg[0] = (Eterm) (A0);		\
-    reg[1] = (Eterm) (A1);		\
-    reg[2] = (Eterm) (A2);		\
-    (Proc)->i = (BeamInstr*) ((Trap)->addressv[erts_active_code_ix()]); \
-    (Proc)->freason = TRAP;				\
-} while (0)
+#endif /* !defined(BEAMASM) */
 
-#define BIF_TRAP0(Trap_, p) do {                  \
-      (p)->arity = 0;				\
-      (p)->i = (BeamInstr*) ((Trap_)->addressv[erts_active_code_ix()]);	\
-      (p)->freason = TRAP;			\
-      return THE_NON_VALUE;			\
- } while(0)
+#define ERTS_BIF_PREP_TRAP0(Ret, Trap, Proc)                                  \
+    do {                                                                      \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 0);                                \
+        (Ret) = THE_NON_VALUE;                                                \
+    } while (0)
 
-#define BIF_TRAP1(Trap_, p, A0) do {				\
-      Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;	\
-      (p)->arity = 1;						\
-      reg[0] = (A0);						\
-      (p)->i = (BeamInstr*) ((Trap_)->addressv[erts_active_code_ix()]); \
-      (p)->freason = TRAP;					\
-      return THE_NON_VALUE;					\
- } while(0)
+#define ERTS_BIF_PREP_TRAP1(Ret, Trap, Proc, A0)                              \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;  \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 1);                                \
+        reg[0] = (Eterm) (A0);                                                \
+        (Ret) = THE_NON_VALUE;                                                \
+    } while (0)
 
-#define BIF_TRAP2(Trap_, p, A0, A1) do {			\
-      Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;	\
-      (p)->arity = 2;						\
-      reg[0] = (A0);						\
-      reg[1] = (A1);						\
-      (p)->i = (BeamInstr*) ((Trap_)->addressv[erts_active_code_ix()]); \
-      (p)->freason = TRAP;					\
-      return THE_NON_VALUE;					\
- } while(0)
+#define ERTS_BIF_PREP_TRAP2(Ret, Trap, Proc, A0, A1)                          \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;  \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 2);                                \
+        reg[0] = (Eterm) (A0);                                                \
+        reg[1] = (Eterm) (A1);                                                \
+        (Ret) = THE_NON_VALUE;                                                \
+    } while (0)
 
-#define BIF_TRAP3(Trap_, p, A0, A1, A2) do {			\
-      Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;	\
-      (p)->arity = 3;						\
-      reg[0] = (A0);						\
-      reg[1] = (A1);						\
-      reg[2] = (A2);						\
-      (p)->i = (BeamInstr*) ((Trap_)->addressv[erts_active_code_ix()]); \
-      (p)->freason = TRAP;					\
-      return THE_NON_VALUE;					\
- } while(0)
+#define ERTS_BIF_PREP_TRAP3(Ret, Trap, Proc, A0, A1, A2)                      \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;  \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 3);                                \
+        reg[0] = (Eterm) (A0);                                                \
+        reg[1] = (Eterm) (A1);                                                \
+        reg[2] = (Eterm) (A2);                                                \
+        (Ret) = THE_NON_VALUE;                                                \
+    } while (0)
 
-#define BIF_TRAP4(Trap_, p, A0, A1, A2, A3) do {		\
-      Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;	\
-      (p)->arity = 4;						\
-      reg[0] = (A0);						\
-      reg[1] = (A1);						\
-      reg[2] = (A2);						\
-      reg[3] = (A3);						\
-      (p)->i = (BeamInstr*) ((Trap_)->addressv[erts_active_code_ix()]); \
-      (p)->freason = TRAP;					\
-      return THE_NON_VALUE;					\
- } while(0)
+#define ERTS_BIF_PREP_TRAP4(Ret, Trap, Proc, A0, A1, A2, A3)                  \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;  \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 4);                                \
+        reg[0] = (Eterm) (A0);                                                \
+        reg[1] = (Eterm) (A1);                                                \
+        reg[2] = (Eterm) (A2);                                                \
+        reg[3] = (Eterm) (A3);                                                \
+        (Ret) = THE_NON_VALUE;                                                \
+    } while (0)
 
-#define BIF_TRAP_CODE_PTR_0(p, Code_) do {	\
-      (p)->arity = 0;				\
-      (p)->i = (BeamInstr*) (Code_);		\
-      (p)->freason = TRAP;			\
-      return THE_NON_VALUE;			\
- } while(0)
+#define ERTS_BIF_PREP_TRAP3_NO_RET(Trap, Proc, A0, A1, A2)                    \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((Proc))->registers->x_reg_array.d;  \
+        ERTS_BIF_PREP_TRAP((Trap), (Proc), 3);                                \
+        reg[0] = (Eterm) (A0);                                                \
+        reg[1] = (Eterm) (A1);                                                \
+        reg[2] = (Eterm) (A2);                                                \
+    } while (0)
 
-#define BIF_TRAP_CODE_PTR_(p, Code_) do {	\
-      (p)-> i = (BeamInstr*) (Code_);		\
-      (p)->freason = TRAP;			\
-      return THE_NON_VALUE;			\
- } while(0)
+#define BIF_TRAP0(Trap_, p)                                                   \
+    do {                                                                      \
+        ERTS_BIF_PREP_TRAP((Trap_), (p), 0);                                  \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
 
-extern Export *bif_return_trap_export;
+#define BIF_TRAP1(Trap_, p, A0)                                               \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;     \
+        ERTS_BIF_PREP_TRAP((Trap_), (p), 1);                                  \
+        reg[0] = (A0);                                                        \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
+
+#define BIF_TRAP2(Trap_, p, A0, A1)                                           \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;     \
+        ERTS_BIF_PREP_TRAP((Trap_), (p), 2);                                  \
+        reg[0] = (A0);                                                        \
+        reg[1] = (A1);                                                        \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
+
+#define BIF_TRAP3(Trap_, p, A0, A1, A2)                                       \
+        do {                                                                  \
+        Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;     \
+        ERTS_BIF_PREP_TRAP((Trap_), (p), 3);                                  \
+        reg[0] = (A0);                                                        \
+        reg[1] = (A1);                                                        \
+        reg[2] = (A2);                                                        \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
+
+#define BIF_TRAP4(Trap_, p, A0, A1, A2, A3)                                   \
+    do {                                                                      \
+        Eterm* reg = erts_proc_sched_data((p))->registers->x_reg_array.d;     \
+        ERTS_BIF_PREP_TRAP((Trap_), (p), 4);                                  \
+        reg[0] = (A0);                                                        \
+        reg[1] = (A1);                                                        \
+        reg[2] = (A2);                                                        \
+        reg[3] = (A3);                                                        \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
+
+#define BIF_TRAP_CODE_PTR(p, Code_, Arity_)                                   \
+    do {                                                                      \
+        (p)->arity = (Arity_);                                                \
+        (p)->i = (Code_);                                                     \
+        (p)->freason = TRAP;                                                  \
+        return THE_NON_VALUE;                                                 \
+    } while(0)
+
+extern Export bif_return_trap_export;
 #define ERTS_BIF_PREP_YIELD_RETURN_X(RET, P, VAL, OP)			\
 do {									\
     ERTS_VBUMP_ALL_REDS(P);						\
-    ERTS_BIF_PREP_TRAP2(RET, bif_return_trap_export, (P), (VAL), (OP));\
+    ERTS_BIF_PREP_TRAP2(RET, &bif_return_trap_export, (P), (VAL), (OP));\
 } while (0)
 
 #define ERTS_BIF_PREP_YIELD_RETURN(RET, P, VAL) \
@@ -450,7 +452,7 @@ do {									\
 #define ERTS_BIF_YIELD_RETURN_X(P, VAL, OP)				\
 do {									\
     ERTS_VBUMP_ALL_REDS(P);						\
-    BIF_TRAP2(bif_return_trap_export, (P), (VAL), (OP));		\
+    BIF_TRAP2(&bif_return_trap_export, (P), (VAL), (OP));		\
 } while (0)
 
 #define ERTS_BIF_RETURN_YIELD(P) ERTS_VBUMP_ALL_REDS((P))
@@ -537,13 +539,13 @@ do {					\
 } while (0)
 
 int erts_call_dirty_bif(ErtsSchedulerData *esdp, Process *c_p,
-			BeamInstr *I, Eterm *reg);
+                        ErtsCodePtr I, Eterm *reg);
 
 BIF_RETTYPE
 erts_schedule_bif(Process *proc,
 		  Eterm *argv,
-		  BeamInstr *i,
-		  ErtsCodeMFA *mfa,
+		  ErtsCodePtr i,
+		  const ErtsCodeMFA *mfa,
 		  ErtsBifFunc dbf,
 		  ErtsSchedType sched_type,
 		  Eterm mod,
@@ -553,8 +555,8 @@ erts_schedule_bif(Process *proc,
 ERTS_GLB_INLINE BIF_RETTYPE
 erts_reschedule_bif(Process *proc,
 		    Eterm *argv,
-		    BeamInstr *i,
-		    ErtsCodeMFA *mfa,
+		    ErtsCodePtr i,
+		    const ErtsCodeMFA *mfa,
 		    ErtsBifFunc dbf,
 		    ErtsSchedType sched_type);
 
@@ -563,8 +565,8 @@ erts_reschedule_bif(Process *proc,
 ERTS_GLB_INLINE BIF_RETTYPE
 erts_reschedule_bif(Process *proc,
 		    Eterm *argv,
-		    BeamInstr *i,
-		    ErtsCodeMFA *mfa,
+		    ErtsCodePtr i,
+		    const ErtsCodeMFA *mfa,
 		    ErtsBifFunc dbf,
 		    ErtsSchedType sched_type)
 {
@@ -574,57 +576,8 @@ erts_reschedule_bif(Process *proc,
 
 #endif /* ERTS_GLB_INLINE_INCL_FUNC_DEF */
 
-#ifdef ERL_WANT_HIPE_BIF_WRAPPER__
-
-#ifndef HIPE
-
-#define HIPE_WRAPPER_BIF_DISABLE_GC(BIF_NAME, ARITY)
-
-#else
-
-#include "erl_fun.h"
-#include "hipe_mode_switch.h"
-
-/*
- * Hipe wrappers used by native code for BIFs that disable GC while trapping.
- * Also add usage of the wrapper in ../hipe/hipe_bif_list.m4
- *
- * Problem:
- * When native code calls a BIF that traps, hipe_mode_switch will push a
- * "trap frame" on the Erlang stack in order to find its way back from beam_emu
- * back to native caller when finally done. If GC is disabled and stack/heap
- * is full there is no place to push the "trap frame".
- *
- * Solution:
- * We reserve space on stack for the "trap frame" here before the BIF is called.
- * If the BIF does not trap, the space is reclaimed here before returning.
- * If the BIF traps, hipe_push_beam_trap_frame() will detect that a "trap frame"
- * already is reserved and use it.
- */
-
-
-#define HIPE_WRAPPER_BIF_DISABLE_GC(BIF_NAME, ARITY)			\
-BIF_RETTYPE								\
-nbif_impl_hipe_wrapper_ ## BIF_NAME ## _ ## ARITY (NBIF_ALIST);		\
-BIF_RETTYPE								\
-nbif_impl_hipe_wrapper_ ## BIF_NAME ## _ ## ARITY (NBIF_ALIST)		\
-{									\
-    BIF_RETTYPE  res;							\
-    hipe_reserve_beam_trap_frame(BIF_P, BIF__ARGS, ARITY);		\
-    res = nbif_impl_ ## BIF_NAME ## _ ## ARITY (NBIF_CALL_ARGS);	\
-    if (is_value(res) || BIF_P->freason != TRAP) {			\
-	hipe_unreserve_beam_trap_frame(BIF_P);				\
-    }									\
-    return res;								\
-}
-
-#endif
-
-#endif /* ERL_WANT_HIPE_BIF_WRAPPER__ */
+Uint16 erts_monitor_opts(Eterm opts, Eterm *tag);
 
 #include "erl_bif_table.h"
 
 #endif
-
-#undef HIPE_WRAPPER_BIF_DISABLE_GC
-#define HIPE_WRAPPER_BIF_DISABLE_GC(A,B)

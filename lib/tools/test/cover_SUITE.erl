@@ -31,13 +31,14 @@ all() ->
     NoStartStop = [eif,otp_5305,otp_5418,otp_7095,otp_8273,
                    otp_8340,otp_8188,compile_beam_opts,eep37,
                    analyse_no_beam, line_0, compile_beam_no_file,
-                   otp_13277, otp_13289],
+                   compile_beam_missing_backend,
+                   otp_13277, otp_13289, guard_in_lc],
     StartStop = [start, compile, analyse, misc, stop,
                  distribution, reconnect, die_and_reconnect,
                  dont_reconnect_after_stop, stop_node_after_disconnect,
                  export_import, otp_5031, otp_6115,
                  otp_8270, otp_10979_hanging_node, otp_14817,
-                 local_only, startup_race, otp_16476],
+                 local_only, startup_race, otp_16476, cover_clauses],
     case whereis(cover_server) of
         undefined ->
             [coverage,StartStop ++ NoStartStop];
@@ -1600,6 +1601,15 @@ otp_14817(Config) when is_list(Config) ->
     ok = file:delete(CovOut),
     ok.
 
+%% Tests a bug where cover failed for an export named clauses
+cover_clauses(Config) when is_list(Config) ->
+    Test = <<"-module(cover_clauses).
+              -export([clauses/0]).
+              clauses() -> ok.
+             ">>,
+    File = cc_mod(cover_clauses, Test, Config),
+    ok.
+
 %% Take compiler options from beam in cover:compile_beam
 compile_beam_opts(Config) when is_list(Config) ->
     {ok, Cwd} = file:get_cwd(),
@@ -1706,11 +1716,41 @@ compile_beam_no_file(Config) ->
     [{error,{no_file_attribute,BeamFile}}] = cover:compile_beam_directory(Dir),
     ok.
 
+%% GH-4353: Don't crash when the backend for generating the abstract code
+%% is missing.
+compile_beam_missing_backend(Config) ->
+    PrivDir = proplists:get_value(priv_dir, Config),
+    Dir = filename:join(PrivDir, ?FUNCTION_NAME),
+    ok = filelib:ensure_dir(filename:join(Dir, "*")),
+    code:add_patha(Dir),
+    Str = lists:append(
+            ["-module(no_backend).\n"
+             "-compile(export_all).\n"
+             "foo() -> ok.\n"]),
+    TT = do_scan(Str),
+    Forms = [ begin {ok,Y} = erl_parse:parse_form(X),Y end || X <- TT ],
+    {ok,_,Bin} = compile:forms(Forms, [debug_info]),
+
+    %% Create a debug_info chunk with a non-existing backend.
+    {ok,no_backend,All0} = beam_lib:all_chunks(Bin),
+    FakeBackend = definitely__not__an__existing__backend,
+    FakeDebugInfo = {debug_info_v1,FakeBackend,nothing_here},
+    All = lists:keyreplace("Dbgi", 1, All0, {"Dbgi", term_to_binary(FakeDebugInfo)}),
+    {ok,NewBeam} = beam_lib:build_module(All),
+    BeamFile = filename:join(Dir, "no_backend.beam"),
+    ok = file:write_file(BeamFile, NewBeam),
+
+    {error,{{missing_backend,FakeBackend},BeamFile}} = cover:compile_beam(no_backend),
+    [{error,{{missing_backend,FakeBackend},BeamFile}}] = cover:compile_beam_directory(Dir),
+
+    ok.
+
 do_scan([]) ->
     [];
 do_scan(Str) ->
     {done,{ok,T,_},C} = erl_scan:tokens([],Str,0),
     [ T | do_scan(C) ].
+
 
 %% PR 856. Fix a bc bug.
 otp_13277(Config) ->
@@ -1741,6 +1781,29 @@ otp_13289(Config) ->
              ">>,
     File = cc_mod(t, Test, Config),
     <<1,2,3>> = t:t(),
+    ok = file:delete(File),
+    ok.
+
+guard_in_lc(Config) ->
+    Test = <<"-module(t).
+              -export([lc/1]).
+
+              lc(L) ->
+                  [V || V <- L, V == a orelse element(1, V) == a].
+             ">>,
+
+    %% The filter in the list comprehension must be compiled as a
+    %% guard expression. Therefore, `cover` must NOT rewrite the list
+    %% comprehension in the test code like this:
+    %%
+    %% [V || V <- L,
+    %%       case V == a of
+    %%           true -> true;
+    %%           false -> element(1, V) == a
+    %%       end].
+
+    File = cc_mod(t, Test, Config),
+    [a,{a,good}] = t:lc([a, b, {x,y}, {a,good}, "ignore"]),
     ok = file:delete(File),
     ok.
 

@@ -186,6 +186,9 @@ set_env(char *key, char *value)
     efree(str);
 #endif
 #endif
+    /* codechecker_intentional [Malloc] we may leak str if we don't
+       have copying putenv but that is fine since we only have a
+       constant amount of environment variables */
 }
 
 static void
@@ -206,7 +209,6 @@ int main(int argc, char** argv)
 {
 #endif
     int single_scheduler;
-    int hipe = 0;
     int eargv_size;
     int eargc_base;		/* How many arguments in the base of eargv. */
     char* emulator;
@@ -312,9 +314,6 @@ int main(int argc, char** argv)
         source_file = "<no source>";
 	switch (argv[1][0]) {
 	case '+':
-            if (strcmp(argv[1], "+native") == 0) {
-                hipe = 1;
-            }
 	    PUSH(argv[1]);
 	    break;
 	case '-':
@@ -377,20 +376,14 @@ int main(int argc, char** argv)
 	argc--, argv++;
     }
 
-    /* The compile server and hipe benefits from multiple schedulers. */
-    single_scheduler = single_scheduler && !use_server && !hipe;
+    /* The compile server benefits from multiple schedulers. */
+    single_scheduler = single_scheduler && !use_server;
 
     if (single_scheduler) {
         /* Limit ourselves to a single scheduler to save memory and avoid
          * starving the system of threads when used in parallel builds (e.g.
          * make -j64 on a 64-core system). */
         UNSHIFT("+S1");
-    }
-
-    if (hipe) {
-        /* Need to use the non-asm emulator to compile hipe files */
-        UNSHIFT("smp");
-        UNSHIFT("-emu_flavor");
     }
 
     /*
@@ -583,6 +576,8 @@ run_erlang(char* progname, char** argv)
 #ifdef __WIN32__
     int status;
 #endif
+
+    ASSERT(progname && argv[0]);
 
     if (debug > 0) {
         fprintf(stderr, "spawning erl for %s", source_file);
@@ -900,6 +895,8 @@ find_executable(char* progname)
             struct stat s;
             if (stat(real_name, &s) == 0 && s.st_mode & S_IFREG) {
                 return real_name;
+            } else {
+                free(real_name);
             }
         }
     } while (*path++ == ':');
@@ -916,7 +913,11 @@ safe_realpath(char* file)
      * Solaris.
      */
     char* real_name = emalloc(PATH_MAX + 1);
-    return realpath(file, real_name);
+    char* result = realpath(file, real_name);
+    if (result != real_name) {
+        free(real_name);
+    }
+    return result;
 }
 #endif
 
@@ -992,6 +993,7 @@ start_compile_server(char* node_name, char** argv)
         putc('\n', stderr);
     }
 
+    ASSERT(eargv[0]);
 #ifdef __WIN32__
     if (my_spawnvp(0, eargv) == -1) {
 	fprintf(stderr, "erlc: Error executing '%s': %d", progname,

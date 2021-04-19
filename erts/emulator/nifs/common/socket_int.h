@@ -66,6 +66,28 @@
 
 #endif
 
+/* Copied from sys.h
+ * In VC++, noreturn is a declspec that has to be before the types,
+ * but in GNUC it is an attribute to be placed between return type
+ * and function name, hence __decl_noreturn <types> __noreturn <function name>
+ *
+ * at some platforms (e.g. Android) __noreturn is defined at sys/cdef.h
+ */
+#if __GNUC__
+#  define __decl_noreturn
+#  ifndef __noreturn
+#     define __noreturn __attribute__((noreturn))
+#  endif
+#else
+#  if defined(__WIN32__) && defined(_MSC_VER)
+#    define __noreturn
+#    define __decl_noreturn __declspec(noreturn)
+#  else
+#    define __noreturn
+#    define __decl_noreturn
+#  endif
+#endif
+
 #include <erl_nif.h>
 
 #ifdef HAVE_STRUCT_SOCKADDR_UN_SUN_PATH
@@ -125,6 +147,22 @@ typedef int BOOLEAN_T;
 #define BOOL2ATOM(__B__) ((__B__) ? esock_atom_true : esock_atom_false)
 
 #define B2S(__B__) ((__B__) ? "true" : "false")
+
+#define NUM(Array) (sizeof(Array) / sizeof(*(Array)))
+
+
+#ifdef HAVE_SOCKLEN_T
+#  define SOCKLEN_T socklen_t
+#else
+#  define SOCKLEN_T size_t
+#endif
+
+#ifdef __WIN32__
+#define SOCKOPTLEN_T int
+#else
+#define SOCKOPTLEN_T SOCKLEN_T
+#endif
+
 
 /* ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  * "Global" atoms (esock_atom_...)
@@ -216,6 +254,7 @@ typedef int BOOLEAN_T;
     GLOBAL_ATOM_DEF(info);                     \
     GLOBAL_ATOM_DEF(initmsg);                  \
     GLOBAL_ATOM_DEF(invalid);                  \
+    GLOBAL_ATOM_DEF(integer_range);            \
     GLOBAL_ATOM_DEF(iov);                      \
     GLOBAL_ATOM_DEF(ip);                       \
     GLOBAL_ATOM_DEF(ipcomp_level);             \
@@ -380,6 +419,7 @@ GLOBAL_ERROR_REASON_ATOM_DEFS
 #define MKA(E,S)            enif_make_atom((E), (S))
 #define MKBIN(E,B)          enif_make_binary((E), (B))
 #define MKI(E,I)            enif_make_int((E), (I))
+#define MKI64(E,I)          enif_make_int64((E), (I))
 #define MKL(E,L)            enif_make_long((E), (L))
 #define MKLA(E,A,L)         enif_make_list_from_array((E), (A), (L))
 #define MKL1(E,T)           enif_make_list1((E), (T))
@@ -417,12 +457,13 @@ GLOBAL_ERROR_REASON_ATOM_DEFS
 #define COMPARE(A, B)        enif_compare((A), (B))
 #define COMPARE_PIDS(P1, P2) enif_compare_pids((P1), (P2))
 
-#define IS_ATOM(E,  TE) enif_is_atom((E),   (TE))
-#define IS_BIN(E,   TE) enif_is_binary((E), (TE))
-#define IS_LIST(E,  TE) enif_is_list((E),   (TE))
-#define IS_MAP(E,   TE) enif_is_map((E), (TE))
-#define IS_NUM(E,   TE) enif_is_number((E), (TE))
-#define IS_TUPLE(E, TE) enif_is_tuple((E),  (TE))
+#define IS_ATOM(E,    TE) enif_is_atom((E),   (TE))
+#define IS_BIN(E,     TE) enif_is_binary((E), (TE))
+#define IS_LIST(E,    TE) enif_is_list((E),   (TE))
+#define IS_MAP(E,     TE) enif_is_map((E), (TE))
+#define IS_NUM(E,     TE) enif_is_number((E), (TE))
+#define IS_TUPLE(E,   TE) enif_is_tuple((E),  (TE))
+#define IS_INTEGER(E, TE) esock_is_integer((E),   (TE))
 
 #define GET_ATOM_LEN(E, TE, LP) \
     enif_get_atom_length((E), (TE), (LP), ERL_NIF_LATIN1)

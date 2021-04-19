@@ -66,10 +66,6 @@ typedef struct process Process;
 #include "erl_db.h"
 #undef ERTS_ONLY_SCHED_SPEC_ETS_DATA
 
-#ifdef HIPE
-#include "hipe_process.h"
-#endif
-
 #undef ERL_THR_PROGRESS_TSD_TYPE_ONLY
 #define ERL_THR_PROGRESS_TSD_TYPE_ONLY
 #include "erl_thr_progress.h"
@@ -662,10 +658,10 @@ typedef struct ErtsSchedulerRegisters_ {
 
 #ifdef BEAMASM
     /* Seldom-used scheduler-specific data. */
-    UWord start_time_i;
+    ErtsCodePtr start_time_i;
     UWord start_time;
 
-#if !defined(NATIVE_ERLANG_STACK) && defined(HARD_DEBUG)
+#if !defined(NATIVE_ERLANG_STACK) && defined(JIT_HARD_DEBUG)
     /* Holds the initial thread stack pointer. Used to ensure that everything
      * that is pushed to the stack is also popped. */
     UWord *initial_sp;
@@ -869,16 +865,9 @@ erts_reset_max_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi)
 #define ERTS_PSD_ETS_OWNED_TABLES               6
 #define ERTS_PSD_ETS_FIXED_TABLES               7
 #define ERTS_PSD_DIST_ENTRY	                8
-#define ERTS_PSD_PENDING_SUSPEND                9
-#define ERTS_PSD_SUSPENDED_SAVED_CALLS_BUF	10 /* keep last... */
+#define ERTS_PSD_PENDING_SUSPEND                9 /* keep last... */
 
-#define ERTS_PSD_SIZE				11
-
-#if !defined(HIPE)
-#  undef ERTS_PSD_SUSPENDED_SAVED_CALLS_BUF
-#  undef ERTS_PSD_SIZE
-#  define ERTS_PSD_SIZE 10
-#endif
+#define ERTS_PSD_SIZE				10
 
 typedef struct {
     void *data[ERTS_PSD_SIZE];
@@ -1024,16 +1013,6 @@ struct process {
     Uint min_vheap_size;        /* Minimum size of virtual heap (in words). */
     Uint max_heap_size;         /* Maximum size of heap (in words). */
 
-#if !defined(NO_FPE_SIGNALS) || defined(HIPE)
-    volatile unsigned long fp_exception;
-#endif
-
-#ifdef HIPE
-    /* HiPE-specific process fields. Put it early in struct process,
-       to enable smaller & faster addressing modes on the x86. */
-    struct hipe_process_state hipe;
-#endif
-
     /*
      * Saved x registers.
      */
@@ -1044,7 +1023,7 @@ struct process {
     unsigned max_arg_reg;	/* Maximum number of argument registers available. */
     Eterm def_arg_reg[6];	/* Default array for argument registers. */
 
-    BeamInstr* i;		/* Program counter for threaded code. */
+    ErtsCodePtr i;              /* Program counter. */
     Sint catches;		/* Number of catches on stack */
     Uint32 rcount;		/* suspend count */
     int  schedule_count;	/* Times left to reschedule a low prio process */
@@ -1055,6 +1034,7 @@ struct process {
 
     Process *next;		/* Pointer to next process in run queue */
 
+    Sint64 uniq;                /* Used for process unique integer */
     ErtsSignalPrivQueues sig_qs; /* Signal queues */
     ErtsBifTimers *bif_timers;	/* Bif timers aiming at this process */
 
@@ -1075,11 +1055,14 @@ struct process {
                                    often used instead of pointer to funcinfo
                                    instruction. */
     } u;
-    ErtsCodeMFA* current;	/* Current Erlang function, part of the funcinfo:
-				 * module(0), function(1), arity(2)
-				 * (module and functions are tagged atoms;
-				 * arity an untagged integer).
-				 */
+    const ErtsCodeMFA* current; /* Current Erlang function, part of the
+                                 * funcinfo:
+                                 *
+                                 * module(0), function(1), arity(2)
+                                 *
+                                 * (module and functions are tagged atoms;
+                                 * arity an untagged integer).
+                                 */
 
     /*
      * Information mainly for post-mortem use (erl crash dump).
@@ -1442,7 +1425,9 @@ typedef struct {
 
     int multi_set;
 
-    Eterm tag;                  /* If SPO_ASYNC */
+    Eterm tag;                  /* spawn_request tag (if SPO_ASYNC is set) */
+    Eterm monitor_tag;          /* monitor tag (if SPO_MONITOR is set) */
+    Uint16 monitor_oflags;      /* flags to bitwise-or onto origin flags */
     Eterm opts;                 /* Option list for seq-trace... */
 
     /* Input fields used for distributed spawn only */
@@ -1450,6 +1435,7 @@ typedef struct {
     Eterm group_leader;
     Eterm mfa;
     DistEntry *dist_entry;
+    ErtsMonLnkDist *mld;        /* copied from dist_entry->mld */
     ErtsDistExternal *edep;
     ErlHeapFragment *ede_hfrag;
     Eterm token;
@@ -1467,6 +1453,15 @@ typedef struct {
     int scheduler;
 
 } ErlSpawnOpts;
+
+#define ERTS_SET_DEFAULT_SPAWN_OPTS(SOP)                                \
+    do {                                                                \
+        (SOP)->flags = erts_default_spo_flags;                          \
+        (SOP)->opts = NIL;                                              \
+        (SOP)->tag = am_spawn_reply;                                    \
+        (SOP)->monitor_tag = THE_NON_VALUE;                             \
+        (SOP)->monitor_oflags = (Uint16) 0;                             \
+    } while (0)
 
 /*
  * The KILL_CATCHES(p) macro kills pending catches for process p.
@@ -1539,25 +1534,23 @@ extern int erts_system_profile_ts_type;
 #define F_DELAY_GC           (1 << 13) /* Similar to disable GC (see below) */
 #define F_SCHDLR_ONLN_WAITQ  (1 << 14) /* Process enqueued waiting to change schedulers online */
 #define F_HAVE_BLCKD_NMSCHED (1 << 15) /* Process has blocked normal multi-scheduling */
-#define F_HIPE_MODE          (1 << 16) /* Process is executing in HiPE mode */
-#define F_DELAYED_DEL_PROC   (1 << 17) /* Delay delete process (dirty proc exit case) */
-#define F_DIRTY_CLA          (1 << 18) /* Dirty copy literal area scheduled */
-#define F_DIRTY_GC_HIBERNATE (1 << 19) /* Dirty GC hibernate scheduled */
-#define F_DIRTY_MAJOR_GC     (1 << 20) /* Dirty major GC scheduled */
-#define F_DIRTY_MINOR_GC     (1 << 21) /* Dirty minor GC scheduled */
-#define F_HIBERNATED         (1 << 22) /* Hibernated */
-#define F_TRAP_EXIT          (1 << 23) /* Trapping exit */
+#define F_DELAYED_DEL_PROC   (1 << 16) /* Delay delete process (dirty proc exit case) */
+#define F_DIRTY_CLA          (1 << 17) /* Dirty copy literal area scheduled */
+#define F_DIRTY_GC_HIBERNATE (1 << 18) /* Dirty GC hibernate scheduled */
+#define F_DIRTY_MAJOR_GC     (1 << 19) /* Dirty major GC scheduled */
+#define F_DIRTY_MINOR_GC     (1 << 20) /* Dirty minor GC scheduled */
+#define F_HIBERNATED         (1 << 21) /* Hibernated */
+#define F_TRAP_EXIT          (1 << 22) /* Trapping exit */
+#define F_DBG_FORCED_TRAP    (1 << 23) /* DEBUG: Last BIF call was a forced trap */
 
 /* Signal queue flags */
 #define FS_OFF_HEAP_MSGQ       (1 << 0) /* Off heap msg queue */
 #define FS_ON_HEAP_MSGQ        (1 << 1) /* On heap msg queue */
 #define FS_OFF_HEAP_MSGQ_CHNG  (1 << 2) /* Off heap msg queue changing */
 #define FS_LOCAL_SIGS_ONLY     (1 << 3) /* Handle privq sigs only */
-#define FS_DEFERRED_SAVED_LAST (1 << 4) /* Deferred sig_qs.saved_last */
-#define FS_DEFERRED_SAVE       (1 << 5) /* Deferred sig_qs.save */
+#define FS_UNUSED1             (1 << 4) /* */
+#define FS_UNUSED2             (1 << 5) /* */
 #define FS_DELAYED_PSIGQS_LEN  (1 << 6) /* Delayed update of sig_qs.len */
-#define FS_HIPE_RECV_LOCKED    (1 << 7) /* HiPE message queue locked */
-#define FS_HIPE_RECV_YIELD     (1 << 8) /* HiPE receive yield */
 
 /*
  * F_DISABLE_GC and F_DELAY_GC are similar. Both will prevent
@@ -2229,13 +2222,6 @@ erts_psd_set(Process *p, int ix, void *data)
 #define ERTS_PROC_SET_PENDING_SUSPEND(P, PS) \
     ((void *) erts_psd_set((P), ERTS_PSD_PENDING_SUSPEND, (void *) (PS)))
 
-#ifdef HIPE
-#define ERTS_PROC_GET_SUSPENDED_SAVED_CALLS_BUF(P) \
-  ((struct saved_calls *) erts_psd_get((P), ERTS_PSD_SUSPENDED_SAVED_CALLS_BUF))
-#define ERTS_PROC_SET_SUSPENDED_SAVED_CALLS_BUF(P, SCB) \
-  ((struct saved_calls *) erts_psd_set((P), ERTS_PSD_SUSPENDED_SAVED_CALLS_BUF, (void *) (SCB)))
-#endif
-
 ERTS_GLB_INLINE Eterm erts_proc_get_error_handler(Process *p);
 ERTS_GLB_INLINE Eterm erts_proc_set_error_handler(Process *p, Eterm handler);
 
@@ -2446,7 +2432,13 @@ ERTS_GLB_INLINE
 Process *erts_get_current_process(void)
 {
     ErtsSchedulerData *esdp = erts_get_scheduler_data();
-    return esdp ? esdp->current_process : NULL;
+    if (!esdp)
+        return NULL;
+    if (esdp->current_process)
+        return esdp->current_process;
+    if (esdp->free_process)
+        return esdp->free_process;
+    return NULL;
 }
 
 ERTS_GLB_INLINE

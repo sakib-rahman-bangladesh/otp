@@ -686,6 +686,16 @@ get_tcpi_sacked(Sock) ->
     </func>
 
     <func>
+      <name name="info" arity="1"  since="@OTP-17203@"/>
+      <fsummary>Retreive miscellaneous information about a socket</fsummary>
+      <desc>
+        <p>
+          Produces a term containg miscellaneous information about a socket.
+        </p>
+      </desc>
+    </func>
+
+    <func>
       <name name="ntoa" arity="1"  since="OTP R16B02"/>
       <fsummary>Convert IPv6/IPV4 address to ASCII.</fsummary>
       <desc>
@@ -1048,7 +1058,7 @@ get_tcpi_sacked(Sock) ->
               socket when no other data is exchanged. If
               the other end does not respond, the connection is
               considered broken and an error message is sent to
-              the controlling process. Defaults to <c>disabled</c>.</p>
+              the controlling process. Defaults to <c>false</c>.</p>
             <marker id="option-linger"></marker>
           </item>
           <tag><c>{linger, {true|false, Seconds}}</c></tag>
@@ -1206,12 +1216,16 @@ setcap cap_sys_admin,cap_sys_ptrace,cap_dac_read_search+epi beam.smp</code>
           <tag><c>binary</c></tag>
           <item>
             <p>Received <c>Packet</c> is delivered as a binary.</p>
+            <marker id="option-nodelay"></marker>
           </item>
           <tag><c>{nodelay, Boolean}</c>(TCP/IP sockets)</tag>
           <item>
             <p>If <c>Boolean == true</c>, option <c>TCP_NODELAY</c>
-              is turned on for the socket, which means that also small
-              amounts of data are sent immediately.</p>
+            is turned on for the socket, which means that also small
+            amounts of data are sent immediately.</p>
+	    <p>This option is <em>not</em> supported for
+	    <c>domain = local</c>, but if <c>inet_backend =/= socket</c>
+	    this error will be <em>ignored</em>. </p>
           </item>
           <tag><c>{nopush, Boolean}</c>(TCP/IP sockets)</tag>
           <item>
@@ -1445,9 +1459,9 @@ setcap cap_sys_admin,cap_sys_ptrace,cap_dac_read_search+epi beam.smp</code>
               returns <c>{error,timeout}</c>. The recommended setting is
               <c>true</c>, which automatically closes the socket.
               Defaults to <c>false</c> because of backward compatibility.</p>
-            <marker id="option-sndbuf"></marker>
+            <marker id="option-show_econnreset"></marker>
           </item>
-          <tag><c>{show_econnreset, Boolean}</c>(TCP/IP sockets)</tag>
+          <tag><c>{show_econnreset, Boolean}</c> (TCP/IP sockets) </tag>
           <item>
             <p>When this option is set to <c>false</c>, which is
               default, an RST received from the TCP peer is treated
@@ -1474,7 +1488,7 @@ setcap cap_sys_admin,cap_sys_ptrace,cap_dac_read_search+epi beam.smp</code>
               <seemfa marker="gen_tcp#accept/1"><c>gen_tcp:accept/1</c></seemfa>
               inherits the <c>show_econnreset</c> setting from the
               listening socket.</p>
-            <marker id="option-show_econnreset"></marker>
+            <marker id="option-sndbuf"></marker>
           </item>
           <tag><c>{sndbuf, Size}</c></tag>
           <item>

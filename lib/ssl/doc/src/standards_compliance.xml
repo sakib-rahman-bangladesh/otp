@@ -140,7 +140,7 @@
     <list type="bulleted">
       <item>PSK and session resumption is supported (stateful and stateless tickets)</item>
       <item>Anti-replay protection using Bloom-filters with stateless tickets</item>
-      <item>Early data and 0-RTT not supported</item>
+      <item>Early data and 0-RTT is supported</item>
       <item>Key and Initialization Vector Update is supported</item>
     </list>
     <p>For more detailed information see the
@@ -251,8 +251,8 @@
 	  </url>
 	</cell>
         <cell align="left" valign="middle"></cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>PC</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
 
       <row>
@@ -387,8 +387,8 @@
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
@@ -526,8 +526,8 @@
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
@@ -1135,14 +1135,14 @@
 	  </url>
 	</cell>
         <cell align="left" valign="middle"><em>Client</em></cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle"><em>Server</em></cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"><em></em></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
 
       <row>
@@ -1274,8 +1274,8 @@
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
@@ -1341,8 +1341,8 @@
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
@@ -1461,6 +1461,18 @@
         <cell align="left" valign="middle"><em>Client</em></cell>
 	<cell align="left" valign="middle"><em>PC</em></cell>
 	<cell align="left" valign="middle"><em>22.1</em></cell>
+      </row>
+      <row>
+        <cell align="left" valign="middle"></cell>
+        <cell align="left" valign="middle">Arbitrary certificate chain orderings</cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>22.2</em></cell>
+      </row>
+      <row>
+        <cell align="left" valign="middle"></cell>
+        <cell align="left" valign="middle">Extraneous certificates in chain</cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.2</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
@@ -1655,14 +1667,14 @@
 	  </url>
 	</cell>
         <cell align="left" valign="middle"><em>Client</em></cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle"><em>Server</em></cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"><em></em></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
 
       <row>
@@ -1672,27 +1684,27 @@
 	  </url>
 	</cell>
         <cell align="left" valign="middle"><em>Client</em></cell>
-	<cell align="left" valign="middle"><em>PC</em></cell>
-	<cell align="left" valign="middle"><em>22.2</em></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
 
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle"><em>Server</em></cell>
-	<cell align="left" valign="middle"><em>PC</em></cell>
-	<cell align="left" valign="middle"><em>22.2</em></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
       <row>
         <cell align="left" valign="middle"></cell>
         <cell align="left" valign="middle">early_data (RFC8446)</cell>
-	<cell align="left" valign="middle"><em>NC</em></cell>
-	<cell align="left" valign="middle"></cell>
+	<cell align="left" valign="middle"><em>C</em></cell>
+	<cell align="left" valign="middle"><em>23.3</em></cell>
       </row>
 
       <row>

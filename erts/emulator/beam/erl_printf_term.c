@@ -76,6 +76,22 @@ do {									\
     (CNT) += res__;							\
 } while (0)
 
+#define PRINT_UWORD64(CNT, FN, ARG, C, P, W, I)				\
+do {									\
+    int res__ = erts_printf_uword64((FN), (ARG), (C), (P), (W), (I));	\
+    if (res__ < 0)							\
+	return res__;							\
+    (CNT) += res__;							\
+} while (0)
+
+#define PRINT_SWORD64(CNT, FN, ARG, C, P, W, I)				\
+do {									\
+    int res__ = erts_printf_sword64((FN), (ARG), (C), (P), (W), (I));	\
+    if (res__ < 0)							\
+	return res__;							\
+    (CNT) += res__;							\
+} while (0)
+
 #define PRINT_DOUBLE(CNT, FN, ARG, C, P, W, I)				\
 do {									\
     int res__ = erts_printf_double((FN), (ARG), (C), (P), (W), (I));	\
@@ -350,9 +366,11 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
             PRINT_STRING(res, fn, arg, "<TNV>");
 	    goto L_done;
         } else if (is_CP(obj)) {
-            ErtsCodeMFA* mfa = erts_find_function_from_pc(cp_val(obj));
+            const ErtsCodeMFA* mfa = erts_find_function_from_pc(cp_val(obj));
             if (mfa) {
-                BeamInstr *start = erts_codemfa_to_code(mfa);
+                const UWord *func_start = erts_codemfa_to_code(mfa);
+                const UWord *cp_addr = (UWord*)cp_val(obj);
+
                 PRINT_STRING(res, fn, arg, "<");
                 PRINT_ATOM(res, fn, arg, mfa->module, dcount);
                 PRINT_STRING(res, fn, arg, ":");
@@ -360,7 +378,7 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
                 PRINT_STRING(res, fn, arg, "/");
                 PRINT_UWORD(res, fn, arg, 'u', 0, 1, (ErlPfUWord) mfa->arity);
                 PRINT_STRING(res, fn, arg, "+");
-                PRINT_UWORD(res, fn, arg, 'u', 0, 1, (ErlPfUWord) (cp_val(obj) - start));
+                PRINT_UWORD(res, fn, arg, 'u', 0, 1, (ErlPfUWord) (cp_addr - func_start));
                 PRINT_STRING(res, fn, arg, ">");
             } else {
                 PRINT_STRING(res, fn, arg, "<cp/header:");
@@ -436,8 +454,8 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	    PRINT_UWORD(res, fn, arg, 'u', 0, 1,
 			(ErlPfUWord) port_channel_no(wobj));
 	    PRINT_CHAR(res, fn, arg, '.');
-	    PRINT_UWORD(res, fn, arg, 'u', 0, 1,
-			(ErlPfUWord) port_number(wobj));
+	    PRINT_UWORD64(res, fn, arg, 'u', 0, 1,
+			  (ErlPfUWord64) port_number(wobj));
 	    PRINT_CHAR(res, fn, arg, '>');
 	    break;
 	case LIST_DEF:
@@ -603,14 +621,15 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 		PRINT_CHAR(res, fn, arg, '>');
 	    }
 	    break;
-	case MAP_DEF:
-            if (is_flatmap(wobj)) {
+	case MAP_DEF: {
+            Eterm *head = boxed_val(wobj);
+
+            if (is_flatmap_header(*head)) {
                 Uint n;
                 Eterm *ks, *vs;
-                flatmap_t *mp = (flatmap_t *)flatmap_val(wobj);
-                n  = flatmap_get_size(mp);
-                ks = flatmap_get_keys(mp);
-                vs = flatmap_get_values(mp);
+                n  = flatmap_get_size(head);
+                ks = flatmap_get_keys(head);
+                vs = flatmap_get_values(head);
 
                 PRINT_CHAR(res, fn, arg, '#');
                 PRINT_CHAR(res, fn, arg, '{');
@@ -625,8 +644,6 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
                 }
             } else {
                 Uint n, mapval;
-                Eterm *head;
-                head = hashmap_val(wobj);
                 mapval = MAP_HEADER_VAL(*head);
                 switch (MAP_HEADER_TYPE(*head)) {
                 case MAP_HEADER_TAG_HAMT_HEAD_ARRAY:
@@ -671,6 +688,7 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
                 }
             }
             break;
+        }
 	case MATCHSTATE_DEF:
 	    PRINT_STRING(res, fn, arg, "#MatchState");
 	    break;

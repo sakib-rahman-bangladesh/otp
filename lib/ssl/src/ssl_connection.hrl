@@ -36,7 +36,7 @@
 -record(static_env, {
                      role                  :: client | server,
                      transport_cb          :: atom(),   % callback module
-                     protocol_cb           :: tls_connection | dtls_connection,
+                     protocol_cb           :: tls_gen_connection | dtls_gen_connection,
                      data_tag              :: atom(),   % ex tcp.
                      close_tag             :: atom(),   % ex tcp_closed
                      error_tag             :: atom(),   % ex tcp_error
@@ -64,6 +64,7 @@
                         resumption = false   :: boolean(),  %% TLS 1.3
                         change_cipher_spec_sent = false :: boolean(),  %% TLS 1.3
                         sni_guided_cert_selection = false :: boolean(), %% TLS 1.3
+                        early_data_accepted = false :: boolean(), %% TLS 1.3
                         allow_renegotiate = true                    ::boolean(),
                         %% Ext handling
                         hello,                %%:: #client_hello{} | #server_hello{}            

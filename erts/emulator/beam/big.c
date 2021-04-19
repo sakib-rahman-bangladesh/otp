@@ -1648,21 +1648,16 @@ big_to_double(Wterm x, double* resp)
     ErtsDigit* s = BIG_V(xp) + xl;
     short xsgn = BIG_SIGN(xp);
     double dbase = ((double)(D_MASK)+1);
-#ifndef NO_FPE_SIGNALS 
-    volatile unsigned long *fpexnp = erts_get_current_fp_exception();
-#endif
-    __ERTS_SAVE_FP_EXCEPTION(fpexnp);
 
-    __ERTS_FP_CHECK_INIT(fpexnp);
     while (xl--) {
-	d = d * dbase + *--s;
+        d = d * dbase + *--s;
 
-	__ERTS_FP_ERROR(fpexnp, d, __ERTS_RESTORE_FP_EXCEPTION(fpexnp); return -1);
+        if (!erts_isfinite(d)) {
+            return -1;
+        }
     }
 
     *resp = xsgn ? -d : d;
-    __ERTS_FP_ERROR(fpexnp,*resp,;);
-    __ERTS_RESTORE_FP_EXCEPTION(fpexnp);
     return 0;
 }
 
@@ -1710,9 +1705,6 @@ double_to_big(double x, Eterm *heap, Uint hsz)
 	d = x; /* trunc */
 	xp[i] = d; /* store digit */
 	x -= d; /* remove integer part */
-    }
-    while ((ds & (BIG_DIGITS_PER_WORD - 1)) != 0) {
-	xp[ds++] = 0;
     }
 
     if (is_negative) {

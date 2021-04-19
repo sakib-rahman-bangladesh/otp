@@ -43,12 +43,12 @@ SET_I_REL(Offset) {
 
 SET_CP_I_ABS(Target) {
     c_p->i = $Target;
-    ASSERT(VALID_INSTR(*c_p->i));
+    ASSERT(VALID_INSTR(*(const BeamInstr*)c_p->i));
 }
 
 SET_REL_I(Dst, Offset) {
     $Dst = I + ($Offset);
-    ASSERT(VALID_INSTR(*$Dst));
+    ASSERT(VALID_INSTR(*(const BeamInstr*)$Dst));
 }
 
 FAIL(Fail) {
@@ -170,7 +170,7 @@ DISPATCH_EXPORT(Export) {
 
     DTRACE_GLOBAL_CALL_FROM_EXPORT(c_p, ep);
 
-    SET_I(ep->addressv[erts_active_code_ix()]);
+    SET_I(ep->addresses[erts_active_code_ix()]);
     CHECK_ARGS(I);
     dis_next = *I;
 

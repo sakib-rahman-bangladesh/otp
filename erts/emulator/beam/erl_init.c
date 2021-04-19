@@ -56,10 +56,6 @@
 
 #include "jit/beam_asm.h"
 
-#ifdef HIPE
-#include "hipe_mode_switch.h"	/* for hipe_mode_switch_init() */
-#endif
-
 #ifdef HAVE_SYS_RESOURCE_H
 #  include <sys/resource.h>
 #endif
@@ -94,11 +90,6 @@ const int etp_arch_bits = 32;
 #else
 # error "Not 64-bit, nor 32-bit arch"
 #endif
-#ifdef HIPE
-const int etp_hipe = 1;
-#else
-const int etp_hipe = 0;
-#endif
 #ifdef BEAMASM
 const int etp_beamasm = 1;
 #else
@@ -127,6 +118,11 @@ const Eterm etp_magic_ref_header = ERTS_MAGIC_REF_THING_HEADER;
 const Eterm etp_magic_ref_header = ERTS_REF_THING_HEADER;
 #endif
 const Eterm etp_the_non_value = THE_NON_VALUE;
+#ifdef TAG_LITERAL_PTR
+const Eterm etp_ptr_mask = (~(Eterm)7);
+#else
+const Eterm etp_ptr_mask = (~(Eterm)3);
+#endif
 #ifdef ERTS_HOLE_MARKER
 const Eterm etp_hole_marker = ERTS_HOLE_MARKER;
 #else
@@ -209,7 +205,7 @@ int erts_no_crash_dump = 0;	/* Use -d to suppress crash dump. */
 int erts_no_line_info = 0;	/* -L: Don't load line information */
 
 #ifdef BEAMASM
-int erts_asm_dump = 0;		/* -asmdump: Dump assembly code */
+int erts_jit_asm_dump = 0;	/* -JDdump: Dump assembly code */
 #endif
 
 /*
@@ -319,8 +315,8 @@ erl_init(int ncpu,
 	 ErtsDbSpinCount db_spin_count)
 {
     erts_monitor_link_init();
-    erts_proc_sig_queue_init();
     erts_bif_unique_init();
+    erts_proc_sig_queue_init(); /* Must be after erts_bif_unique_init(); */
     erts_init_time(time_correction, time_warp_mode);
     erts_init_sys_common_misc();
     erts_init_process(ncpu, proc_tab_sz, legacy_proc_tab);
@@ -381,9 +377,6 @@ erl_init(int ncpu,
 			      initializations */
 #endif
     erl_sys_late_init();
-#ifdef HIPE
-    hipe_mode_switch_init(); /* Must be after init_load/beam_catches/init */
-#endif
     packet_parser_init();
     erl_nif_init();
     erts_msacc_init();
@@ -442,8 +435,7 @@ erl_first_process_otp(char* mod_name, int argc, char** argv)
     hp += 2;
     args = CONS(hp, boot_mod, args);
 
-    so.flags = erts_default_spo_flags;
-    so.opts = NIL;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
     res = erl_spawn_system_process(&parent, am_erl_init, am_start, args, &so);
     ASSERT(is_internal_pid(res));
 
@@ -464,7 +456,9 @@ erl_system_process_otp(Eterm parent_pid, char* modname, int off_heap_msgq, int p
     mod = erts_atom_put((byte *) modname, sys_strlen(modname),
                         ERTS_ATOM_ENC_LATIN1, 1);
 
-    so.flags = erts_default_spo_flags|SPO_USE_ARGS;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
+
+    so.flags |= SPO_USE_ARGS;
 
     if (off_heap_msgq) {
         so.flags |= SPO_OFF_HEAP_MSGQ;
@@ -477,7 +471,6 @@ erl_system_process_otp(Eterm parent_pid, char* modname, int off_heap_msgq, int p
     so.priority       = prio;
     so.max_gen_gcs    = (Uint16) erts_atomic32_read_nob(&erts_max_gen_gcs);
     so.scheduler      = 0;
-    so.opts = NIL;
 
     res = erl_spawn_system_process(parent, mod, am_start, NIL, &so);
     ASSERT(is_internal_pid(res));
@@ -499,8 +492,7 @@ Eterm erts_internal_spawn_system_process_3(BIF_ALIST_3) {
     ASSERT(is_atom(func));
     ASSERT(erts_list_length(args) >= 0);
 
-    so.flags = erts_default_spo_flags;
-    so.opts = NIL;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
     res = erl_spawn_system_process(BIF_P, mod, func, args, &so);
 
     if (is_non_value(res)) {
@@ -1486,9 +1478,6 @@ erl_start(int argc, char **argv)
 #endif
 		strcat(tmp, ",SMP");
 		strcat(tmp, ",ASYNC_THREADS");
-#ifdef HIPE
-		strcat(tmp, ",HIPE");
-#endif
 		erts_fprintf(stderr, "Erlang ");
 		if (tmp[1]) {
 		    erts_fprintf(stderr, "(%s) ", tmp+1);
@@ -1640,6 +1629,20 @@ erl_start(int argc, char **argv)
 
             switch (sub_param[0])
             {
+            case 'D':
+                sub_param++;
+                if (has_prefix("dump", sub_param)) {
+                    arg = get_arg(sub_param+4, argv[i + 1], &i);
+                    if (sys_strcmp(arg, "true") == 0) {
+                        erts_jit_asm_dump = 1;
+                    } else if (sys_strcmp(arg, "false") == 0) {
+                        erts_jit_asm_dump = 0;
+                    } else {
+                        erts_fprintf(stderr, "bad +JDdump flag %s\n", arg);
+                        erts_usage();
+                    }
+                }
+                break;
             case 'P':
                 sub_param++;
 
@@ -1666,7 +1669,7 @@ erl_start(int argc, char **argv)
                 }
                 break;
             default:
-                erts_fprintf(stderr, "invalid JIT option %s\n", arg);
+                erts_fprintf(stderr, "invalid JIT option %s\n", argv[i]);
                 erts_usage();
                 break;
             }
@@ -2127,12 +2130,6 @@ erl_start(int argc, char **argv)
 	    break;
 
 	case 'a':
-#ifdef BEAMASM
-	    if (strcmp(argv[i]+2, "smdump") == 0) {
-		erts_asm_dump = 1;
-		break;
-	    }
-#endif
 	    /* suggested stack size (Kilo Words) for threads in thread pool */
 	    arg = get_arg(argv[i]+2, argv[i+1], &i);
 	    erts_async_thread_suggested_stack_size = atoi(arg);
@@ -2445,7 +2442,7 @@ erl_start(int argc, char **argv)
 
 __decl_noreturn void erts_thr_fatal_error(int err, const char *what)
 {
-    char *errstr = err ? strerror(err) : NULL;
+    const char *errstr = err ? strerror(err) : NULL;
     erts_fprintf(stderr,
 		 "Failed to %s: %s%s(%d)\n",
 		 what,

@@ -31,6 +31,115 @@
   </header>
   <p>This document describes the changes made to the STDLIB application.</p>
 
+<section><title>STDLIB 3.14.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Handle maps in <c>erl_parse:tokens()</c>.</p>
+          <p>
+	    Own Id: OTP-16978</p>
+        </item>
+        <item>
+          <p>
+	    The erlang shell function <c>rr</c> has been fixed to be
+	    able to read records from files within a code archive.</p>
+          <p>
+	    Own Id: OTP-17182 Aux Id: PR-3002 </p>
+        </item>
+        <item>
+	    <p>If <c>beam_lib</c> is asked to return abstract code
+	    for a BEAM file produced by Elixir and Elixir is not
+	    installed on the computer, <c>beam_lib</c> will no longer
+	    crash, but will return an error tuple. The
+	    <c>cover:compile_beam()</c> and
+	    <c>cover:compile_beam_directory()</c> functions have been
+	    updated to also return an error tuple in that
+	    situation.</p>
+          <p>
+	    Own Id: OTP-17194 Aux Id: GH-4353 </p>
+        </item>
+        <item>
+          <p>
+	    Correct example module <c>erl_id_trans</c> regarding the
+	    <c>{char, C}</c> type.</p>
+          <p>
+	    Own Id: OTP-17273</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>STDLIB 3.14</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    This change fixes the handling of deep lists in the path
+	    component when using uri_string:recompose/1.</p>
+          <p>
+	    Own Id: OTP-16941</p>
+        </item>
+        <item>
+          <p>
+	    Fix <seeerl
+	    marker="shell_docs"><c>shell_docs</c></seeerl> to clear
+	    shell decorations (bold/underline) when paginating
+	    output.</p>
+          <p>
+	    Fix various small renderings issues when integrating
+	    <seeerl marker="shell_docs"><c>shell_docs</c></seeerl>
+	    with edoc.</p>
+          <p>
+	    Own Id: OTP-17047</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Improved the API and documentation of the uri_string
+	    module.</p>
+          <p>
+	    Added a new chapter to the Users Guide about Uniform
+	    Resource Identifiers and their handling with the new API.</p>
+          <p>
+	    Added two new API functions:
+	    uri_string:allowed_characters/0 and
+	    uri_string:percent_decode/1.</p>
+          <p>
+	    This change has been marked as potentially incompatible
+	    as uri_string:normalize/2 used to decode percent-encoded
+	    character triplets that corresponded to characters not in
+	    the reserved set. After this change,
+	    uri_string:normalize/2 will only decode those
+	    percent-encoded triplets that correspond to characters in
+	    the unreserved set (ALPHA / DIGIT / "-" / "." / "_" /
+	    "~").</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16460</p>
+        </item>
+        <item>
+          <p>
+	    The <c>shell_docs</c> module has been expanded with the
+	    possibility to configure unicode, ansi and column size
+	    for the rendered text.</p>
+          <p>
+	    Own Id: OTP-16990</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>STDLIB 3.13.2</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>

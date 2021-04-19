@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -147,13 +147,33 @@ init_per_group(_GroupName, Config) ->
 end_per_group(_GroupName, Config) ->
     Config.
 
-init_per_testcase(gethostnative_debug_level, Config) ->
+
+init_per_testcase(Case, Config0) ->
+    ?P("init_per_testcase -> entry with"
+       "~n   Config:   ~p"
+       "~n   Nodes:    ~p"
+       "~n   Links:    ~p"
+       "~n   Monitors: ~p",
+       [Config0, erlang:nodes(), pi(links), pi(monitors)]),
+
+    kernel_test_global_sys_monitor:reset_events(),
+
+    Config1 = init_per_testcase2(Case, Config0),
+
+    ?P("init_per_testcase -> done when"
+       "~n   Config:   ~p"
+       "~n   Nodes:    ~p"
+       "~n   Links:    ~p"
+       "~n   Monitors: ~p", [Config1, erlang:nodes(), pi(links), pi(monitors)]),
+    Config1.
+
+init_per_testcase2(gethostnative_debug_level, Config) ->
     ?TT(?MINS(2)),
     Config;
-init_per_testcase(gethostnative_soft_restart, Config) ->
+init_per_testcase2(gethostnative_soft_restart, Config) ->
     ?TT(?MINS(2)),
     Config;
-init_per_testcase(lookup_bad_search_option, Config) ->
+init_per_testcase2(lookup_bad_search_option, Config) ->
     Db = inet_db,
     Key = res_lookup,
     %% The bad option cannot enter through inet_db:set_lookup/1,
@@ -163,17 +183,37 @@ init_per_testcase(lookup_bad_search_option, Config) ->
     ets:insert(Db, {Key,[lookup_bad_search_option]}),
     ?P("init_per_testcase -> Misconfigured resolver lookup order"),
     [{Key,Prev}|Config];
-init_per_testcase(_Func, Config) ->
+init_per_testcase2(_Func, Config) ->
     Config.
 
-end_per_testcase(lookup_bad_search_option, Config) ->
-    Db = inet_db,
-    Key = res_lookup,
+end_per_testcase(Case, Config) ->
+    ?P("end_per_testcase -> entry with"
+       "~n   Config:   ~p"
+       "~n   Nodes:    ~p"
+       "~n   Links:    ~p"
+       "~n   Monitors: ~p",
+       [Config, erlang:nodes(), pi(links), pi(monitors)]),
+
+    ?P("system events during test: "
+       "~n   ~p", [kernel_test_global_sys_monitor:events()]),
+
+    end_per_testcase2(Case, Config),
+
+    ?P("end_per_testcase -> done with"
+       "~n   Nodes:    ~p"
+       "~n   Links:    ~p"
+       "~n   Monitors: ~p", [erlang:nodes(), pi(links), pi(monitors)]),
+    ok.
+
+end_per_testcase2(lookup_bad_search_option, Config) ->
+    ?P("end_per_testcase2 -> restore resolver lookup order"),
+    Db   = inet_db,
+    Key  = res_lookup,
     Prev = proplists:get_value(Key, Config),
     ets:delete(Db, Key),
     ets:insert(Db, Prev),
-    ?P("end_per_testcase -> Restored resolver lookup order");
-end_per_testcase(_Func, _Config) ->
+    ?P("end_per_testcase2 -> resolver lookup order restored");
+end_per_testcase2(_Func, _Config) ->
     ok.
 
 t_gethostbyaddr() ->
@@ -1013,6 +1053,7 @@ hosts_file_quirks(Config) when is_list(Config) ->
     %% ensure it has our RC
     Rc = rpc:call(TestNode, inet_db, get_rc, []),
     {hosts_file, HostsFile} = lists:keyfind(hosts_file, 1, Rc),
+    false = lists:keyfind(host, 1, Rc),
     %%
     %% check entries
     io:format("Check hosts file contents~n", []),
@@ -1031,14 +1072,13 @@ hosts_file_quirks(Config) when is_list(Config) ->
     hosts_file_quirks_verify(TestNode, V1),
     %%
     %% test add and del
-    ok =
-        rpc:call(
-          TestNode, inet_db, add_host,
-          [inet_ex(1), [h_ex("a"), h_ex("B")]]),
+    A1 = inet_ex(1),
+    Hs1 = [h_ex("a"), h_ex("B")],
+    ok = rpc:call(TestNode, inet_db, add_host, [A1, Hs1]),
     io:format("Check after add host~n", []),
     hosts_file_quirks_verify(
       TestNode,
-      [{R1, inet_ex(1)},
+      [{R1, A1},
        {R2, inet_ex(2)},
        {R3, inet6_ex(3)},
        {R5, inet_ex(5)},
@@ -1049,6 +1089,8 @@ hosts_file_quirks(Config) when is_list(Config) ->
        {R3, h_ex("a"), inet6},
        {R3, h_ex("c"), inet6}
       ]),
+    {host, A1, Hs1} =
+        lists:keyfind(host, 1, rpc:call(TestNode, inet_db, get_rc, [])),
     ok = rpc:call(TestNode, inet_db, del_host, [inet_ex(1)]),
     io:format("Check after del host~n", []),
     hosts_file_quirks_verify(TestNode, V1),
@@ -1130,7 +1172,7 @@ gethostnative_debug_level(Config) when is_list(Config) ->
     gethostnative_control(Config, Opts).
 
 gethostnative_adjusted_opts(Config, CtrlSeq) ->
-    Factor = ?config(gen_inet_factor, Config),
+    Factor = ?config(kernel_factor, Config),
     gethostnative_adjusted_opts2(Factor, CtrlSeq).
 
 gethostnative_adjusted_opts2(1, CtrlSeq) ->
@@ -1754,4 +1796,12 @@ add_del_host_v6(_Config) ->
     {error, nxdomain} = inet_hosts:gethostbyname(Alias, inet6),
     ok = inet_db:add_host(Ip, [Name, Alias]),
     {ok, HostEnt} = inet_hosts:gethostbyname(Name, inet6).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+pi(Item) ->
+    {Item, Val} = process_info(self(), Item),
+    Val.
+    
 

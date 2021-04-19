@@ -37,6 +37,7 @@
          t_call_nif_early/1,
          load_traced_nif/1,
          select/1, select_steal/1,
+	 select_error/1,
          monitor_process_a/1,
          monitor_process_b/1,
          monitor_process_c/1,
@@ -44,7 +45,6 @@
          monitor_process_purge/1,
          demonitor_process/1,
          monitor_frenzy/1,
-         hipe/1,
 	 types/1, many_args/1, binaries/1, get_string/1, get_atom/1,
 	 maps/1,
 	 api_macros/1,
@@ -92,10 +92,9 @@ all() ->
     [{group, G} || G <- api_groups()]
         ++
     [reload_error, heap_frag, types, many_args,
-     select, select_steal,
+     {group, select},
      {group, monitor},
      monitor_frenzy,
-     hipe,
      t_load_race,
      t_call_nif_early,
      load_traced_nif,
@@ -137,7 +136,10 @@ groups() ->
                     monitor_process_c,
                     monitor_process_d,
                     monitor_process_purge,
-                    demonitor_process]}].
+                    demonitor_process]},
+     {select, [], [select,
+		   select_error,
+		   select_steal]}].
 
 api_groups() -> [api_latest, api_2_4, api_2_0].
 
@@ -160,11 +162,6 @@ end_per_group(_,_) -> ok.
 init_per_testcase(t_on_load, Config) ->
     ets:new(nif_SUITE, [named_table]),
     Config;
-init_per_testcase(hipe, Config) ->
-    case erlang:system_info(hipe_architecture) of
-	undefined -> {skip, "HiPE is disabled"};
-	_ -> Config
-    end;
 init_per_testcase(nif_whereis_threaded, Config) ->
     case erlang:system_info(threads) of
         true -> Config;
@@ -646,6 +643,7 @@ load_traced_nif(Config) when is_list(Config) ->
 -define(ERL_NIF_SELECT_STOP, (1 bsl 2)).
 -define(ERL_NIF_SELECT_CANCEL, (1 bsl 3)).
 -define(ERL_NIF_SELECT_CUSTOM_MSG, (1 bsl 4)).
+-define(ERL_NIF_SELECT_ERROR, (1 bsl 5)).
 
 -define(ERL_NIF_SELECT_STOP_CALLED, (1 bsl 0)).
 -define(ERL_NIF_SELECT_STOP_SCHEDULED, (1 bsl 1)).
@@ -653,6 +651,8 @@ load_traced_nif(Config) when is_list(Config) ->
 -define(ERL_NIF_SELECT_FAILED, (1 bsl 3)).
 -define(ERL_NIF_SELECT_READ_CANCELLED, (1 bsl 4)).
 -define(ERL_NIF_SELECT_WRITE_CANCELLED, (1 bsl 5)).
+-define(ERL_NIF_SELECT_ERROR_CANCELLED, (1 bsl 6)).
+-define(ERL_NIF_SELECT_NOTSUP, (1 bsl 7)).
 
 select(Config) when is_list(Config) ->
     ensure_lib_loaded(Config),
@@ -787,6 +787,79 @@ receive_ready(R, Ref, IOatom) when is_reference(Ref) ->
 receive_ready(_, Msg, _) ->
     [Got] = flush(),
     {true,_,_} = {Got=:=Msg, Got, Msg}.
+
+
+select_error(Config) when is_list(Config) ->
+    ensure_lib_loaded(Config),
+
+    case os:type() of
+	{unix,linux} ->
+	    select_error_do();
+	_ ->
+	    {skipped, "not Linux"}
+    end.
+
+select_error_do() ->
+    RefBin = list_to_binary(lists:duplicate(100, $x)),
+
+    select_error_do1(0, make_ref(), null),
+    select_error_do1(?ERL_NIF_SELECT_CUSTOM_MSG, [a, "list", RefBin], null),
+    select_error_do1(?ERL_NIF_SELECT_CUSTOM_MSG, [a, "list", RefBin], alloc_env),
+    ok.
+
+select_error_do1(Flag, Ref, MsgEnv) ->
+    {{R, _R_ptr}, {W, W_ptr}} = pipe_nif(),
+    ok = write_nif(W, <<"hej">>),
+    <<"hej">> = read_nif(R, 3),
+
+    %% Wait for error on write end when read end is closed
+    0 = select_nif(W, ?ERL_NIF_SELECT_ERROR bor Flag, W, null, Ref, MsgEnv),
+    [] = flush(0),
+    0 = close_nif(R),
+    receive_ready(W, Ref, ready_error),
+
+    check_stop_ret(select_nif(W, ?ERL_NIF_SELECT_STOP, W, null, Ref, null)),
+    [{fd_resource_stop, W_ptr, _}] = flush(),
+    {1, {W_ptr,_}} = last_fd_stop_call(),
+    true = is_closed_nif(W),
+    select_error_do2(Flag, Ref, MsgEnv).
+
+select_error_do2(Flag, Ref, MsgEnv) ->
+    {{R, _R_ptr}, {W, W_ptr}} = pipe_nif(),
+    ok = write_nif(W, <<"hej">>),
+    <<"hej">> = read_nif(R, 3),
+
+    %% Same again but test cancel of error works
+    0 = select_nif(W, ?ERL_NIF_SELECT_ERROR bor Flag, W, null, Ref, MsgEnv),
+    ?ERL_NIF_SELECT_ERROR_CANCELLED =
+	select_nif(W, ?ERL_NIF_SELECT_ERROR bor ?ERL_NIF_SELECT_CANCEL, W, null, Ref, null),
+    0 = close_nif(R),
+    [] = flush(0),
+    0 = select_nif(W, ?ERL_NIF_SELECT_ERROR bor Flag, W, null, Ref, MsgEnv),
+    receive_ready(W, Ref, ready_error),
+
+    check_stop_ret(select_nif(W, ?ERL_NIF_SELECT_STOP, W, null, Ref, null)),
+    [{fd_resource_stop, W_ptr, _}] = flush(),
+    {1, {W_ptr,_}} = last_fd_stop_call(),
+    true = is_closed_nif(W),
+    ok.
+
+-ifdef(NOT_DEFINED).
+check_select_error_supported() ->
+    {{_R, _R_ptr}, {W, W_ptr}} = pipe_nif(),
+    Ref = make_ref(),
+    case select_nif(W, ?ERL_NIF_SELECT_ERROR, W, null, Ref, null) of
+	0 ->
+	    check_stop_ret(select_nif(W, ?ERL_NIF_SELECT_STOP, W, null, Ref, null)),
+	    [{fd_resource_stop, W_ptr, _}] = flush(),
+	    {1, {W_ptr,_}} = last_fd_stop_call(),
+	    true = is_closed_nif(W),
+	    true;
+
+	Err when Err < 0, (Err band ?ERL_NIF_SELECT_NOTSUP) =/= 0 ->
+	    false
+    end.
+-endif.
 
 %% @doc The stealing child process for the select_steal test. Duplicates given
 %% W/RFds and runs select on them to steal
@@ -1165,18 +1238,6 @@ frenzy_do_op(SelfPix, Op, Rnd, {Pid0,RBins}=State0) ->
 gc_and_return(RetVal) ->
     erlang:garbage_collect(),
     RetVal.
-
-hipe(Config) when is_list(Config) ->
-    Data = proplists:get_value(data_dir, Config),
-    Priv = proplists:get_value(priv_dir, Config),
-    Src = filename:join(Data, "hipe_compiled"),
-    {ok,hipe_compiled} = c:c(Src, [{outdir,Priv},native]),
-    true = code:is_module_native(hipe_compiled),
-    {error, {notsup,_}} = hipe_compiled:try_load_nif(),
-    true = code:delete(hipe_compiled),
-    false = code:purge(hipe_compiled),
-    ok.
-
 
 %% Test NIF building heap fragments
 heap_frag(Config) when is_list(Config) ->    
@@ -3749,6 +3810,7 @@ dupe_resource_nif(_) -> ?nif_stub.
 pipe_nif() -> ?nif_stub.
 write_nif(_,_) -> ?nif_stub.
 read_nif(_,_) -> ?nif_stub.
+close_nif(_) -> ?nif_stub.
 is_closed_nif(_) -> ?nif_stub.
 clear_select_nif(_) -> ?nif_stub.
 last_fd_stop_call() -> ?nif_stub.

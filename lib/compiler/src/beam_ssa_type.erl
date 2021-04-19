@@ -60,7 +60,7 @@
         { func_id :: func_id(),
           limit_return :: boolean(),
           params :: [beam_ssa:b_var()],
-          used_once :: cerl_sets:set(beam_ssa:b_var()) }).
+          used_once :: sets:set(beam_ssa:b_var()) }).
 
 -type type_db() :: #{ beam_ssa:var_name() := type() }.
 
@@ -144,7 +144,17 @@ signatures_1(StMap, FuncDb0, State0) ->
             {State0, FuncDb0}
     end.
 
-sig_function(Id, StMap, State0, FuncDb0) ->
+sig_function(Id, StMap, State, FuncDb) ->
+    try
+        do_sig_function(Id, StMap, State, FuncDb)
+    catch
+        Class:Error:Stack ->
+            #b_local{name=#b_literal{val=Name},arity=Arity} = Id,
+            io:fwrite("Function: ~w/~w\n", [Name,Arity]),
+            erlang:raise(Class, Error, Stack)
+    end.
+
+do_sig_function(Id, StMap, State0, FuncDb0) ->
     case sig_function_1(Id, StMap, State0, FuncDb0) of
         {false, false, State, FuncDb} ->
             %% No added work and the types are identical. Pop ourselves from
@@ -170,7 +180,8 @@ sig_function(Id, StMap, State0, FuncDb0) ->
                   end,
 
             #func_info{in=Cs0} = map_get(Id, FuncDb0),
-            Callers = [C || C <- Cs0, is_map_key(C, State#sig_st.updates)],
+            Updates = State#sig_st.updates,
+            Callers = [C || C <- Cs0, is_map_key(C, Updates)],
             Wl = wl_defer_list(Callers, Wl0),
 
             {State#sig_st{wl=Wl}, FuncDb}
@@ -416,7 +427,17 @@ join_arg_types([], [], Ts) ->
       Ts :: type_db(),
       FuncDb :: func_info_db(),
       Result :: {Linear, FuncDb}.
-opt_function(Linear0, Args, Id, Ts, FuncDb0) ->
+opt_function(Linear, Args, Id, Ts, FuncDb) ->
+    try
+        do_opt_function(Linear, Args, Id, Ts, FuncDb)
+    catch
+        Class:Error:Stack ->
+            #b_local{name=#b_literal{val=Name},arity=Arity} = Id,
+            io:fwrite("Function: ~w/~w\n", [Name,Arity]),
+            erlang:raise(Class, Error, Stack)
+    end.
+
+do_opt_function(Linear0, Args, Id, Ts, FuncDb0) ->
     FakeCall = #b_set{op=call,args=[#b_remote{mod=#b_literal{val=unknown},
                                               name=#b_literal{val=unknown},
                                               arity=0}]},
@@ -933,8 +954,6 @@ simplify(#b_set{op=put_tuple,args=Args}=I, _Ts) ->
         none -> I;
         List -> #b_literal{val=list_to_tuple(List)}
     end;
-simplify(#b_set{op=wait_timeout,args=[#b_literal{val=0}]}, _Ts) ->
-    #b_literal{val=true};
 simplify(#b_set{op=call,args=[#b_remote{}=Rem|Args]}=I, Ts) ->
     case Rem of
         #b_remote{mod=#b_literal{val=Mod},
@@ -953,7 +972,21 @@ simplify(#b_set{op=call,args=[#b_literal{val=Fun}|Args]}=I, _Ts)
                     name=#b_literal{val=F},
                     arity=A},
     I#b_set{args=[Rem|Args]};
-simplify(I, _Ts) -> I.
+simplify(#b_set{op=peek_message,args=[#b_literal{val=Val}]}=I, _Ts) ->
+    case Val of
+        none ->
+            I;
+        _ ->
+            %% A potential receive marker has been substituted with a literal,
+            %% which means it can't actually be a marker on this path. Replace
+            %% it with a normal receive.
+            I#b_set{args=[#b_literal{val=none}]}
+    end;
+simplify(#b_set{op=recv_marker_clear,args=[#b_literal{}]}, _Ts) ->
+    %% Not a receive marker: see the 'peek_message' case.
+    #b_literal{val=none};
+simplify(I, _Ts) ->
+    I.
 
 will_succeed(#b_set{args=[Src]}, Ts, Ds, Sub) ->
     case {Ds, Ts} of
@@ -961,6 +994,9 @@ will_succeed(#b_set{args=[Src]}, Ts, Ds, Sub) ->
             %% Checked operation never returns.
             no;
         {#{ Src := I }, #{}} ->
+            %% There can't be any substitution because the instruction
+            %% is still there.
+            false = is_map_key(Src, Sub),        %Assertion.
             will_succeed_1(I, Src, Ts, Sub);
         {#{}, #{}} ->
             %% The checked instruction has been removed and substituted, so we
@@ -1058,19 +1094,15 @@ will_succeed_1(#b_set{op=call}, _Src, _Ts, _Sub) ->
     maybe;
 will_succeed_1(#b_set{op=get_map_element}, _Src, _Ts, _Sub) ->
     maybe;
+will_succeed_1(#b_set{op=wait_timeout}, _Src, _Ts, _Sub) ->
+    %% It is essential to keep the {succeeded,body} instruction to
+    %% ensure that the failure edge, which potentially leads to a
+    %% landingpad, is preserved. If the failure edge is removed, a Y
+    %% register holding a `try` tag could be reused prematurely.
+    maybe;
 
-will_succeed_1(#b_set{op=wait}, _Src, _Ts, _Sub) ->
-    no;
-
-will_succeed_1(#b_set{}, Src, Ts, Sub) ->
-    case simplify_arg(Src, Ts, Sub) of
-        #b_var{}=Src ->
-            %% No substitution; might fail at runtime.
-            maybe;
-        _ ->
-            %% Substituted with literal or other variable; always succeeds.
-            yes
-    end.
+will_succeed_1(#b_set{}, _Src, _Ts, _Sub) ->
+    maybe.
 
 simplify_is_record(I, #t_tuple{exact=Exact,
                                size=Size,
@@ -1323,15 +1355,27 @@ eval_type_test_bif(I, is_tuple, [Type]) ->
     eval_type_test_bif_1(I, Type, #t_tuple{});
 eval_type_test_bif(I, Op, Types) ->
     case Types of
-        [#t_integer{},#t_integer{elements={0,0}}]
-          when Op =:= '+'; Op =:= '-'; Op =:= 'bor'; Op =:= 'bxor' ->
+        [#t_integer{},#t_integer{elements={0,0}}] when Op =:= 'bor'; Op =:= 'bxor' ->
             #b_set{args=[Result,_]} = I,
             Result;
         [#t_integer{},#t_integer{elements={0,0}}] when Op =:= '*'; Op =:= 'band' ->
             #b_literal{val=0};
-        [#t_integer{},#t_integer{elements={1,1}}] when Op =:= '*'; Op =:= 'div' ->
-            #b_set{args=[Result,_]} = I,
-            Result;
+        [T,#t_integer{elements={0,0}}] when Op =:= '+'; Op =:= '-' ->
+            case beam_types:is_numerical_type(T) of
+                true ->
+                    #b_set{args=[Result,_]} = I,
+                    Result;
+                false ->
+                    I
+            end;
+        [T,#t_integer{elements={1,1}}] when Op =:= '*'; Op =:= 'div' ->
+            case beam_types:is_numerical_type(T) of
+                true ->
+                    #b_set{args=[Result,_]} = I,
+                    Result;
+                false ->
+                    I
+            end;
         [#t_integer{elements={LMin,LMax}},#t_integer{elements={RMin,RMax}}] ->
             case is_inequality_op(Op) of
                 true ->
@@ -1520,7 +1564,7 @@ update_successors(#b_br{bool=#b_literal{val=true},succ=Succ}=Last,
     {Last, update_successor(Succ, Ts, Ls)};
 update_successors(#b_br{bool=#b_var{}=Bool,succ=Succ,fail=Fail}=Last0,
                   Ts, Ds, Ls0, UsedOnce) ->
-    IsTempVar = cerl_sets:is_element(Bool, UsedOnce),
+    IsTempVar = sets:is_element(Bool, UsedOnce),
     case infer_types_br(Bool, Ts, IsTempVar, Ds) of
         {#{}=SuccTs, #{}=FailTs} ->
             Ls1 = update_successor(Succ, SuccTs, Ls0),
@@ -1535,7 +1579,7 @@ update_successors(#b_br{bool=#b_var{}=Bool,succ=Succ,fail=Fail}=Last0,
     end;
 update_successors(#b_switch{arg=#b_var{}=V,fail=Fail0,list=List0}=Last0,
                   Ts, Ds, Ls0, UsedOnce) ->
-    IsTempVar = cerl_sets:is_element(V, UsedOnce),
+    IsTempVar = sets:is_element(V, UsedOnce),
 
     {List1, FailTs, Ls1} =
         update_switch(List0, V, raw_type(V, Ts), Ts, Ds, Ls0, IsTempVar, []),
@@ -1743,7 +1787,11 @@ type(put_tuple, Args, _Anno, Ts, _Ds) ->
     #t_tuple{exact=true,size=length(Args),elements=Es};
 type(resume, [_, _], _Anno, _Ts, _Ds) ->
     none;
-type(_, _, _, _, _) -> any.
+type(wait_timeout, [#b_literal{val=infinity}], _Anno, _Ts, _Ds) ->
+    %% Waits forever, never reaching the 'after' block.
+    beam_types:make_atom(false);
+type(_, _, _, _, _) ->
+    any.
 
 put_map_type(Map, Ss, Ts) ->
     pmt_1(Ss, Ts, normalized_type(Map, Ts)).
@@ -1973,10 +2021,13 @@ infer_type({bif,'=:='}, [#b_var{}=LHS,#b_var{}=RHS], Ts, _Ds) ->
     %%
     %% However, it is safe to subtract a type inferred from '=:=' if
     %% it is single-valued, e.g. if it is [] or the atom 'true'.
-    NegTypes = case beam_types:is_singleton_type(Type) of
-                   true -> PosTypes;
-                   false -> []
-               end,
+    %%
+    %% Note that we subtract the left-hand type from the right-hand
+    %% value and vice versa. We must not subtract the meet of the two
+    %% as it may be too specific. See beam_type_SUITE:type_subtraction/1
+    %% for details.
+    NegTypes = [T || {_, OtherType}=T <- [{RHS, LType}, {LHS, RType}],
+                     beam_types:is_singleton_type(OtherType)],
 
     {PosTypes, NegTypes};
 infer_type({bif,'=:='}, [#b_var{}=Src,#b_literal{}=Lit], Ts, Ds) ->
@@ -2099,7 +2150,7 @@ gcd(A, B) ->
 init_metadata(FuncId, Linear, Params) ->
     {RetCounter, Map0} = init_metadata_1(reverse(Linear), 0, #{}),
     Map = maps:without(Params, Map0),
-    UsedOnce = cerl_sets:from_list(maps:keys(Map)),
+    UsedOnce = sets:from_list(maps:keys(Map), [{version, 2}]),
 
     #metadata{ func_id = FuncId,
                limit_return = (RetCounter >= ?RETURN_LIMIT),

@@ -31,6 +31,417 @@
   </header>
   <p>This document describes the changes made to the ERTS application.</p>
 
+<section><title>Erts 11.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix memory leak of about 6 words when
+	    <c>erlang:process_flag/3</c> is called with a pid of an
+	    already dead process. Bug exists since OTP-21.0.</p>
+          <p>
+	    Own Id: OTP-17081 Aux Id: PR-2930 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed small memory leak in <c>erl_drv_send_term</c> and
+	    <c>erl_drv_output_term</c> when failing due to the term
+	    being invalid.</p>
+          <p>
+	    Own Id: OTP-17089 Aux Id: PR-2934 </p>
+        </item>
+        <item>
+          <p>
+	    The DTrace/SystemTap <c>process_heap_grow</c> probe is
+	    now called with valid the heap and stack pointers for the
+	    process in question.</p>
+          <p>
+	    Own Id: OTP-17096 Aux Id: PR-2932 </p>
+        </item>
+        <item>
+	    <p>Fixed a performance issue in memory allocation for
+	    Linux kernels that didn't support <c>MADV_FREE</c>.</p>
+          <p>
+	    Own Id: OTP-17124</p>
+        </item>
+        <item>
+          <p>
+	    A <seeguide
+	    marker="erts:erl_dist_protocol#new_link_protocol">new
+	    link protocol</seeguide> has been introduced which
+	    prevents links from ending up in an inconsistent state
+	    where one participant considers itself linked while the
+	    other doesn't. This bug has always existed in the
+	    distributed case, but has since OTP 21 also existed in
+	    the node local case since the distributed link protocol
+	    then was adopted also for node local links. The bug
+	    could, however, only trigger if both participants
+	    operated on the link simultaneously.</p>
+          <p>
+	    Own Id: OTP-17127</p>
+        </item>
+        <item>
+          <p>
+	    Fix memory leak when receiving sigchld from port program
+	    to already dead port.</p>
+          <p>
+	    Own Id: OTP-17163</p>
+        </item>
+        <item>
+          <p>
+	    Fix bug where complex seq_trace tokens (that is lists,
+	    tuples, maps etc) could becomes corrupted by the GC. The
+	    bug was introduced in OTP-21.</p>
+          <p>
+	    Own Id: OTP-17209 Aux Id: PR-3039 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed WSLPATH environment variable addition to PATH on
+	    windows, the last character was lost.</p>
+          <p>
+	    Own Id: OTP-17229</p>
+        </item>
+        <item>
+          <p>
+	    Fixed a bug in the timer implementation which could cause
+	    timers that were set to more than 37.25 hours in the
+	    future to be delayed. This could occur if there were
+	    multiple timers scheduled to be triggered very close in
+	    time, but still at different times, and the scheduler
+	    thread handling the timers was not able to handle them
+	    quickly enough. Delayed timers were in this case
+	    triggered when another unrelated timer was triggered.</p>
+          <p>
+	    Own Id: OTP-17253</p>
+        </item>
+        <item>
+          <p>
+	    Fixed small memory leak in <c>erlang:trace/3</c> if
+	    option <c>{tracer,_}</c> is included and the option list
+	    is invalid or the call races with a concurrent trace or
+	    code change operation.</p>
+          <p>
+	    Own Id: OTP-17265 Aux Id: PR-4596 </p>
+        </item>
+        <item>
+          <p>
+	    Fix configure check for <c>inet_pton</c> on 32-bit
+	    windows. The failure of this check would cause epmd to be
+	    built without ipv6 support.</p>
+          <p>
+	    Own Id: OTP-17283</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Various address sanitizer support.</p>
+          <p>
+	    Own Id: OTP-16959 Aux Id: PR-2965 </p>
+        </item>
+        <item>
+	    <p>The emulator will now honor <c>cgroup2</c> CPU
+	    quotas.</p>
+          <p>
+	    Own Id: OTP-17002</p>
+        </item>
+        <item>
+          <p>
+	    Improved memory barrier usage on ARMv8 hardware, and
+	    specifically on Apple silicon.</p>
+          <p>
+	    Own Id: OTP-17195 Aux Id: PR-4505, PR-4538 </p>
+        </item>
+        <item>
+          <p>
+	    Improved memory barrier usage on 64-bit POWER hardware.</p>
+          <p>
+	    Own Id: OTP-17200 Aux Id: PR-4510 </p>
+        </item>
+        <item>
+          <p>
+	    Fix a file descriptor leak when using sendfile and the
+	    remote side closes the connection. This bug has been
+	    present since OTP-21.0.</p>
+          <p>
+	    Own Id: OTP-17244</p>
+        </item>
+        <item>
+          <p>
+	    Refinement of the documentation of the
+	    <c>message_queue_data</c> process flag.</p>
+          <p>
+	    Own Id: OTP-17252 Aux Id: PR-4568 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.8</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause some work scheduled for
+	    execution on scheduler threads to be delayed until other
+	    similar work appeared. Beside delaying various cleanup of
+	    internal data structures also the following could be
+	    delayed:</p> <list> <item>Termination of a distribution
+	    controller process</item> <item>Disabling of the
+	    distribution on a node</item> <item>Gathering of memory
+	    allocator information using the <c>instrument</c>
+	    module</item> <item>Enabling, disabling, and gathering of
+	    <c>msacc</c> information</item> <item>Delivery of
+	    <c>'CHANGE'</c> messages when time offset is
+	    monitored</item> <item>A call to
+	    <c>erlang:cancel_timer()</c></item> <item>A call to
+	    <c>erlang:read_timer()</c></item> <item>A call to
+	    <c>erlang:statistics(io | garbage_collection |
+	    scheduler_wall_time)</c></item> <item>A call to
+	    <c>ets:all()</c></item> <item>A call to
+	    <c>erlang:memory()</c></item> <item>A call to
+	    <c>erlang:system_info({allocator | allocator_sizes,
+	    _})</c></item> <item>A call to
+	    <c>erlang:trace_delivered()</c></item> </list> <p>The bug
+	    existed on runtime systems running on all types of
+	    hardware except for x86/x86_64.</p>
+          <p>
+	    Own Id: OTP-17185</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.7</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Make windows installer remove write access rights for non
+	    admin users when installing to a non default directory.
+	    Reduces the risk for DLL sideloading, but the user should
+	    always be aware of the access rights for the
+	    installation.</p>
+          <p>
+	    Own Id: OTP-17097</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The <c>suspend_process()</c> and <c>resume_process()</c>
+	    BIFs did not check their arguments properly which could
+	    cause an emulator crash.</p>
+          <p>
+	    Own Id: OTP-17080</p>
+        </item>
+        <item>
+          <p>
+	    The runtime system would get into an infinite loop if the
+	    runtime system was started with more than 1023 file
+	    descriptors already open.</p>
+          <p>
+	    Own Id: OTP-17088 Aux Id: ERIERL-580 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix emulator crash when sending small bit-strings over
+	    Erlang distribution while the connection is being setup.</p>
+          <p>
+	    The fault was introduced in OTP-23.0</p>
+          <p>
+	    Own Id: OTP-17083 Aux Id: ERIERL-572 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed bug which could cause VM crash when a NIF is loaded
+	    at the same time as the Erlang implementation of the NIF
+	    is called. Bug exists since OTP 23.0.</p>
+          <p>
+	    Own Id: OTP-16859</p>
+        </item>
+        <item>
+          <p>
+	    Fixed <c>enif_make_map_*</c> functions in debug build
+	    when given environment from <c>enif_alloc_env</c>.</p>
+          <p>
+	    Own Id: OTP-16863 Aux Id: ERL-1352 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed broken configuration option <c>--disable-pie</c>.</p>
+          <p>
+	    Own Id: OTP-16864</p>
+        </item>
+        <item>
+          <p>
+	    Fixed rare distribution bug in race between received
+	    signal (link/monitor/spawn_request/spawn_reply) and
+	    disconnection. Symptom: VM crash. Since: OTP 21.0.</p>
+          <p>
+	    Own Id: OTP-16869 Aux Id: ERL-1337 </p>
+        </item>
+        <item>
+	    <p>Fixed a performance issue when extremely many items
+	    were stored in the process dictionary. (Fixing this bug
+	    also eliminates a compiler warning emitted by the latest
+	    version of Clang.)</p>
+          <p>
+	    Own Id: OTP-16888</p>
+        </item>
+        <item>
+          <p>
+	    Remove <c>-ftree-copyrename</c> from flags passed to
+	    compiler when building erts. The flag is not used by
+	    modern gcc's and is not supported by clang.</p>
+          <p>
+	    Own Id: OTP-16894</p>
+        </item>
+        <item>
+	    <p>Modules using complicated nested binary comprehensions
+	    could fail to load.</p>
+          <p>
+	    Own Id: OTP-16899</p>
+        </item>
+        <item>
+	    <p>Fixed a race in <c>file:read_file/1</c> were an
+	    incomplete file could be returned if another OS process
+	    swapped the file out while reading.</p>
+          <p>
+	    Own Id: OTP-16948 Aux Id: PR-2792 </p>
+        </item>
+        <item>
+	    <p>The call <c>list_to_integer("10", true)</c> would
+	    return <c>4</c> instead of raising an exception. Certain
+	    other atoms would also be interpreted as a number
+	    base.</p>
+          <p>
+	    Own Id: OTP-17030</p>
+        </item>
+        <item>
+          <p>
+	    On macOS 11 (Big Sur), erl would not start if the maximum
+	    number of file descriptors were unlimited (<c>ulimit -n
+	    unlimited</c>).</p>
+          <p>
+	    Own Id: OTP-17055 Aux Id: ERL-1417 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add manifest to all executables and dynamic libraries.</p>
+          <p>
+	    Own Id: OTP-17067 Aux Id: PR-2907 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a crash when exceptions were thrown during call
+	    time tracing.</p>
+          <p>
+	    Own Id: OTP-16994</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 11.1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed bugs causing issues when enabling the ERTS internal
+	    allocators on a system built with the undocumented and
+	    unsupported <c>SMALL_MEMORY</c> feature.</p>
+          <p>
+	    Own Id: OTP-16939</p>
+        </item>
+        <item>
+          <p>
+	    The inet driver used to use 16 as maximum elements in an
+	    I/O vector passed to <c>writev()</c> (and
+	    <c>WSASend()</c> on Windows). When the data to send
+	    contained lots of elements, this caused a performance
+	    degradation since repeated calls to <c>writev()</c> had
+	    to be made to a much larger extent. The inet driver now
+	    looks up actual maximum amount of elements that can be
+	    used on the system, instead of just assuming 16. On most
+	    systems this will result in a maximum amount of I/O
+	    vector elements of 1024.</p>
+          <p>
+	    As of OTP 23.0 the term encoding of signals to send over
+	    the distribution are encoded into I/O vectors of buffers
+	    instead of into a single buffer. Reference counted
+	    binaries are referred to directly from the I/O vector
+	    instead of being copied into the single buffer. That is,
+	    Erlang signals containing huge amounts of reference
+	    counted binaries was effected by this performance
+	    degradation.</p>
+          <p>
+	    Own Id: OTP-16955 Aux Id: ERL-1343, OTP-15618 </p>
+        </item>
+        <item>
+          <p>
+	    In the distributed case, a faulty <c>reply</c> option in
+	    a call to the <c>spawn_request()</c> BIF erroneously
+	    caused a <c>badarg</c> exception instead of a
+	    <c>badopt</c> error message reply.</p>
+          <p>
+	    Own Id: OTP-16991 Aux Id: OTP-15251 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Erts 11.1.1</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
@@ -952,6 +1363,145 @@
 	    set before Erlang can be started.</p>
           <p>
 	    Own Id: OTP-16635 Aux Id: ERL-476 PR-2390 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.7.2.9</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a bug in the timer implementation which could cause
+	    timers that were set to more than 37.25 hours in the
+	    future to be delayed. This could occur if there were
+	    multiple timers scheduled to be triggered very close in
+	    time, but still at different times, and the scheduler
+	    thread handling the timers was not able to handle them
+	    quickly enough. Delayed timers were in this case
+	    triggered when another unrelated timer was triggered.</p>
+          <p>
+	    Own Id: OTP-17253</p>
+        </item>
+        <item>
+          <p>
+	    Fix bug in call_time tracing (used by eprof) that could
+	    cause VM crash. Bug exists since OTP-22.2 (but not in
+	    OTP-23).</p>
+          <p>
+	    Own Id: OTP-17290 Aux Id: GH-4635 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix a file descriptor leak when using sendfile and the
+	    remote side closes the connection. This bug has been
+	    present since OTP-21.0.</p>
+          <p>
+	    Own Id: OTP-17244</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.7.2.8</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause some work scheduled for
+	    execution on scheduler threads to be delayed until other
+	    similar work appeared. Beside delaying various cleanup of
+	    internal data structures also the following could be
+	    delayed:</p> <list> <item>Termination of a distribution
+	    controller process</item> <item>Disabling of the
+	    distribution on a node</item> <item>Gathering of memory
+	    allocator information using the <c>instrument</c>
+	    module</item> <item>Enabling, disabling, and gathering of
+	    <c>msacc</c> information</item> <item>Delivery of
+	    <c>'CHANGE'</c> messages when time offset is
+	    monitored</item> <item>A call to
+	    <c>erlang:cancel_timer()</c></item> <item>A call to
+	    <c>erlang:read_timer()</c></item> <item>A call to
+	    <c>erlang:statistics(io | garbage_collection |
+	    scheduler_wall_time)</c></item> <item>A call to
+	    <c>ets:all()</c></item> <item>A call to
+	    <c>erlang:memory()</c></item> <item>A call to
+	    <c>erlang:system_info({allocator | allocator_sizes,
+	    _})</c></item> <item>A call to
+	    <c>erlang:trace_delivered()</c></item> </list> <p>The bug
+	    existed on runtime systems running on all types of
+	    hardware except for x86/x86_64.</p>
+          <p>
+	    Own Id: OTP-17185</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.7.2.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The <c>suspend_process()</c> and <c>resume_process()</c>
+	    BIFs did not check their arguments properly which could
+	    cause an emulator crash.</p>
+          <p>
+	    Own Id: OTP-17080</p>
+        </item>
+        <item>
+          <p>
+	    The runtime system would get into an infinite loop if the
+	    runtime system was started with more than 1023 file
+	    descriptors already open.</p>
+          <p>
+	    Own Id: OTP-17088 Aux Id: ERIERL-580 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.7.2.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed rare distribution bug in race between received
+	    signal (link/monitor/spawn_request/spawn_reply) and
+	    disconnection. Symptom: VM crash. Since: OTP 21.0.</p>
+          <p>
+	    Own Id: OTP-16869 Aux Id: ERL-1337 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.7.2.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed bugs causing issues when enabling the ERTS internal
+	    allocators on a system built with the undocumented and
+	    unsupported <c>SMALL_MEMORY</c> feature.</p>
+          <p>
+	    Own Id: OTP-16939</p>
         </item>
       </list>
     </section>
@@ -2877,6 +3427,111 @@
 	    -remsh bar </c></p>
           <p>
 	    Own Id: OTP-15794 Aux Id: PR-2219 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.3.5.17</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a bug in the timer implementation which could cause
+	    timers that were set to more than 37.25 hours in the
+	    future to be delayed. This could occur if there were
+	    multiple timers scheduled to be triggered very close in
+	    time, but still at different times, and the scheduler
+	    thread handling the timers was not able to handle them
+	    quickly enough. Delayed timers were in this case
+	    triggered when another unrelated timer was triggered.</p>
+          <p>
+	    Own Id: OTP-17253</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix a file descriptor leak when using sendfile and the
+	    remote side closes the connection. This bug has been
+	    present since OTP-21.0.</p>
+          <p>
+	    Own Id: OTP-17244</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.3.5.16</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause some work scheduled for
+	    execution on scheduler threads to be delayed until other
+	    similar work appeared. Beside delaying various cleanup of
+	    internal data structures also the following could be
+	    delayed:</p> <list> <item>Termination of a distribution
+	    controller process</item> <item>Disabling of the
+	    distribution on a node</item> <item>Gathering of memory
+	    allocator information using the <c>instrument</c>
+	    module</item> <item>Enabling, disabling, and gathering of
+	    <c>msacc</c> information</item> <item>Delivery of
+	    <c>'CHANGE'</c> messages when time offset is
+	    monitored</item> <item>A call to
+	    <c>erlang:cancel_timer()</c></item> <item>A call to
+	    <c>erlang:read_timer()</c></item> <item>A call to
+	    <c>erlang:statistics(io | garbage_collection |
+	    scheduler_wall_time)</c></item> <item>A call to
+	    <c>ets:all()</c></item> <item>A call to
+	    <c>erlang:memory()</c></item> <item>A call to
+	    <c>erlang:system_info({allocator | allocator_sizes,
+	    _})</c></item> <item>A call to
+	    <c>erlang:trace_delivered()</c></item> </list> <p>The bug
+	    existed on runtime systems running on all types of
+	    hardware except for x86/x86_64.</p>
+          <p>
+	    Own Id: OTP-17185</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Erts 10.3.5.15</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed rare distribution bug in race between received
+	    signal (link/monitor/spawn_request/spawn_reply) and
+	    disconnection. Symptom: VM crash. Since: OTP 21.0.</p>
+          <p>
+	    Own Id: OTP-16869 Aux Id: ERL-1337 </p>
+        </item>
+        <item>
+          <p>
+	    The <c>suspend_process()</c> and <c>resume_process()</c>
+	    BIFs did not check their arguments properly which could
+	    cause an emulator crash.</p>
+          <p>
+	    Own Id: OTP-17080</p>
+        </item>
+        <item>
+          <p>
+	    The runtime system would get into an infinite loop if the
+	    runtime system was started with more than 1023 file
+	    descriptors already open.</p>
+          <p>
+	    Own Id: OTP-17088 Aux Id: ERIERL-580 </p>
         </item>
       </list>
     </section>
