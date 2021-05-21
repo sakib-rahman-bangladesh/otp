@@ -28,7 +28,6 @@ These are the tools you need in order to unpack and build Erlang/OTP.
 *   GNU `make`
 *   Compiler -- GNU C Compiler, `gcc` or the C compiler frontend for LLVM, `clang`.
 *   Perl 5
-*   GNU `m4`
 *   `ncurses`, `termcap`, or `termlib` -- The development headers and
     libraries are needed, often known as `ncurses-devel`. Use
     `--without-termcap` to build without any of these libraries. Note that
@@ -37,8 +36,7 @@ These are the tools you need in order to unpack and build Erlang/OTP.
 
 #### Building in Git ####
 
-*   GNU `autoconf` of at least version 2.59. Note that `autoconf` is not
-    needed when building an unmodified version of the released source.
+Build the same way as when building the unpacked tar file.
 
 #### Building on OS X ####
 
@@ -109,9 +107,7 @@ The following instructions are for building [the released source tar ball][].
 
 The variable `$ERL_TOP` will be mentioned a lot of times. It refers to
 the top directory in the source tree. More information about `$ERL_TOP`
-can be found in the [make and $ERL_TOP][] section below. If you are
-building in git you probably want to take a look at the [Building in Git][]
-section below before proceeding.
+can be found in the [make and $ERL_TOP][] section below.
 
 ### Unpacking ###
 
@@ -130,9 +126,6 @@ Now change directory into the base directory and set the `$ERL_TOP` variable.
 Run the following commands to configure the build:
 
     $ ./configure [ options ]
-
-> *NOTE*: If you are building Erlang/OTP from git you will need to run `./otp_build autoconf` to generate
-> the configure scripts.
 
 By default, Erlang/OTP release will be installed in `/usr/local/{bin,lib/erlang}`.
 If you for instance don't have the permission to install in the standard location,
@@ -349,6 +342,7 @@ Some of the available `configure` options are:
 *   `--prefix=PATH` - Specify installation prefix.
 *   `--disable-parallel-configure` - Disable parallel execution of
     `configure` scripts (parallel execution is enabled by default)
+*   `--{enable,disable}-jit` - Force enabling or disabling of the JIT.
 *   `--{enable,disable}-kernel-poll` - Kernel poll support (enabled by
     default if possible)
 *   `--enable-m64-build` - Build 64-bit binaries using the `-m64` flag to
@@ -366,17 +360,25 @@ Some of the available `configure` options are:
 *   `--with-javac=JAVAC` - Specify Java compiler to use
 *   `--{with,without}-javac` - Java compiler (without implies that the
     `jinterface` application won't be built)
-*   `--{enable,disable}-dynamic-ssl-lib` - Dynamic OpenSSL libraries
 *   `--{enable,disable}-builtin-zlib` - Use the built-in source for zlib.
+*   `--{enable,disable}-dynamic-ssl-lib` - Enable or disable dynamic OpenSSL
+    libraries when linking the crypto NIF. By default dynamic linking is
+    done unless it does not work or is if it is a Windows system.
 *   `--{with,without}-ssl` - OpenSSL (without implies that the `crypto`,
     `ssh`, and `ssl` won't be built)
-*   `--with-ssl=PATH` - Specify location of OpenSSL include and lib
-*   `--with-ssl-incl=PATH` - Location of OpenSSL `include` directory,
-    if different than specified by `--with-ssl=PATH`
+*   `--with-ssl=PATH` - Specify base location of OpenSSL include and lib
+    directories.
+*   `--with-ssl-incl=PATH` - Specify base location of OpenSSL `include`
+    directory (if different than base location specified by --with-ssl=PATH).
+*   `--with-ssl-zlib=PATH` - Path to static zlib library to link the
+    crypto NIF with. This zlib library is most often not necessary but
+    might be needed in order to link the NIF in some cases.
+*   `--with-ssl-lib-subdir=RELATIVE_PATH` - Specify extra OpenSSL lib
+    sub-directory to search in (relative to base directory).
 *   `--with-ssl-rpath=yes|no|PATHS` - Runtime library path for OpenSSL.
     Default is `yes`, which equates to a number of standard locations. If
     `no`, then no runtime library paths will be used. Anything else should be
-    a comma separated list of paths.
+    a comma or colon separated list of paths.
 *   `--with-libatomic_ops=PATH` - Use the `libatomic_ops` library for atomic
     memory accesses. If `configure` should inform you about no native atomic
     implementation available, you typically want to try using the
@@ -423,6 +425,66 @@ Some of the available `configure` options are:
 
 If you or your system has special requirements please read the `Makefile` for
 additional configuration information.
+
+#### Important Variables Inspected by configure ####
+
+##### Compiler and Linker #####
+
+*   `CC` - C compiler.
+*   `CFLAGS` - C compiler flags. Defaults to "-g -O2". If you set it,
+    these will be removed.
+*   `STATIC_CFLAGS` - Static C compiler flags.
+*   `CFLAG_RUNTIME_LIBRARY_PATH` - This flag should set runtime library
+    search path for the shared libraries. Note that this actually is a
+    linker flag, but it needs to be passed via the compiler.
+*   `CPP` - C pre-processor.
+*   `CPPFLAGS` - C pre-processor flags.
+*   `CXX` - C++ compiler.
+*   `CXXFLAGS` - C++ compiler flags.
+*   `LD` - Linker.
+*   `LDFLAGS` - Linker flags.
+*   `LIBS` - Libraries.
+
+##### Dynamic Erlang Driver Linking #####
+
+> *NOTE*: Either set all or none of the `DED_LD*` variables (with the exception
+> of `DED_LDFLAGS_CONFTEST`).
+
+*   `DED_LD` - Linker for Dynamically loaded Erlang Drivers.
+*   `DED_LDFLAGS` - Linker flags to use with `DED_LD`.
+*   `DED_LDFLAGS_CONFTEST` - Linker flags to use with `DED_LD` in configure
+    link tests if `DED_LDFLAGS` cannot be used in such tests. If not set,
+    `DED_LDFLAGS` will be used in configure tests.
+*   `DED_LD_FLAG_RUNTIME_LIBRARY_PATH` - This flag should set runtime library
+    search path for shared libraries when linking with `DED_LD`.
+
+##### Large File Support #####
+
+> *NOTE*: Either set all or none of the `LFS_*` variables.
+
+*   `LFS_CFLAGS` - Large file support C compiler flags.
+*   `LFS_LDFLAGS` - Large file support linker flags.
+*   `LFS_LIBS` - Large file support libraries.
+
+##### Other Tools #####
+
+*   `RANLIB` - `ranlib` archive index tool.
+*   `AR` - `ar` archiving tool.
+*   `GETCONF` - `getconf` system configuration inspection tool. `getconf` is
+    currently used for finding out large file support flags to use, and
+    on Linux systems for finding out if we have an NPTL thread library or
+    not.
+
+#### Updating configure Scripts ####
+
+Generated `configure` scripts are nowadays included in the git repository.
+
+If you modify any `configure.in` files or the `erts/aclocal.m4` file, you need
+to regenerate `configure` scripts before the changes will take effect. First
+ensure that you have GNU `autoconf` of version 2.69 in your path. Then execute
+`./otp_build update_configure [--no-commit]` in the `$ERL_TOP` directory. The
+`otp_build` script will verify that `autoconf` is of correct version and will
+refuse to update the `configure` scripts if it is of any other version.
 
 #### Atomic Memory Operations and the VM ####
 
@@ -472,25 +534,12 @@ If you've upgraded the source with a patch you may need to clean up from previou
 builds before the new build.
 Make sure to read the [Pre-built Source Release][] section below before doing a `make clean`.
 
-#### Within Git ####
-
-When building in a Git working directory you also have to have a GNU `autoconf`
-of at least version 2.59 on your system, because you need to generate the
-`configure` scripts before you can start building.
-
-The `configure` scripts are generated by invoking `./otp_build autoconf` in
-the `$ERL_TOP` directory. The `configure` scripts also have to be regenerated
-when a `configure.in` or `aclocal.m4` file has been modified. Note that when
-checking out a branch a `configure.in` or `aclocal.m4` file may change
-content, and you may therefore have to regenerate the `configure` scripts
-when checking out a branch. Regenerated `configure` scripts imply that you
-have to run `configure` and build again.
-
-> *NOTE*: Running `./otp_build autoconf` is **not** needed when building
-> an unmodified version of the released source.
-
 Other useful information can be found at our GitHub wiki:
 * <https://github.com/erlang/otp/wiki>
+
+#### Within Git ####
+
+Build the same way as when building the unpacked tar file.
 
 #### OS X (Darwin) ####
 
@@ -721,3 +770,30 @@ be satisfied.
    [Building on a Mac]: #Advanced-configuration-and-build-of-ErlangOTP_Building_OS-X-Darwin
    [Building with wxErlang]: #Advanced-configuration-and-build-of-ErlangOTP_Building_Building-with-wxErlang
    [libatomic_ops]: https://github.com/ivmai/libatomic_ops/
+
+
+### Erlang/OTP test architectures ###
+
+
+Erlang/OTP are currently tested on the following hardware and Opererating systems.
+This is not an exhaustive list, but we try to keep it as up to date as possible.
+
+Architecture
+
+* x86, x86-64
+* Aarch32, Aarch64
+* powerpc, powerpc64le
+
+Operating System
+
+* Fedora 31
+* FreeBSD
+* macOS 10.4 - 11.2
+* MontaVista 4
+* NetBSD
+* OpenBSD
+* SLES 10, 11, 12
+* SunOS 5.11
+* Ubuntu 10.04 - 20.04
+* Windows 10, Windows Server 2019
+

@@ -702,15 +702,6 @@ child_specs(Config) when is_list(Config) ->
     B5 = {child, {m,f,[a]}, permanent, 1000, worker, dy},
     B6 = {child, {m,f,[a]}, permanent, 1000, worker, [1,2,3]},
 
-    %% Correct child specs!
-    %% <Modules> (last parameter in a child spec) can be [] as we do 
-    %% not test code upgrade here.  
-    C1 = {child, {m,f,[a]}, permanent, infinity, supervisor, []},
-    C2 = {child, {m,f,[a]}, permanent, 1000, supervisor, []},
-    C3 = {child, {m,f,[a]}, temporary, 1000, worker, dynamic},
-    C4 = {child, {m,f,[a]}, transient, 1000, worker, [m]},
-    C5 = {child, {m,f,[a]}, permanent, infinity, worker, [m]},
-
     {error, {invalid_mfa,mfa}} = supervisor:start_child(sup_test, B1),
     {error, {invalid_restart_type, prmanent}} =
 	supervisor:start_child(sup_test, B2),
@@ -732,11 +723,22 @@ child_specs(Config) when is_list(Config) ->
     {error, {invalid_module, 1}} =
 	supervisor:check_childspecs([B6]),
 
-    ok = supervisor:check_childspecs([C1]),
-    ok = supervisor:check_childspecs([C2]),
-    ok = supervisor:check_childspecs([C3]),
-    ok = supervisor:check_childspecs([C4]),
-    ok = supervisor:check_childspecs([C5]),
+    lists:foreach(
+	fun (ChildSpec) ->
+	    ok = supervisor:check_childspecs([ChildSpec])
+	end,
+	[
+	    {child, {m, f, [a]}, Restart, Shutdown, Type, Modules}
+	    ||
+		Restart <- [permanent, transient, temporary],
+		Shutdown <- [0, 1000, infinity, brutal_kill],
+		Type <- [supervisor, worker],
+		Modules <- [dynamic, [], [m], [m1, m2]]
+	]
+    ),
+
+    C1 = {child, {m,f,[a]}, permanent, infinity, supervisor, []},
+    C2 = {child, {m,f,[a]}, permanent, 1000, supervisor, []},
 
     {error,{duplicate_child_name,child}} = supervisor:check_childspecs([C1,C2]),
 
@@ -811,16 +813,19 @@ child_specs_map(Config) when is_list(Config) ->
 	fun
 	    ({never, ChildSpec = #{significant := true}}) ->
 		ChildSpec1 = CSFilter(ChildSpec),
-		{error, {invalid_significant, true}} =
-		    supervisor:check_childspecs([ChildSpec1], never);
+		{error, {bad_combination, BadOpts}} =
+		    supervisor:check_childspecs([ChildSpec1], never),
+		[{auto_shutdown, never}, {significant, true}] = lists:sort(BadOpts);
 	    ({AutoShutdown, ChildSpec = #{restart := undefined, significant := true}}) ->
 		ChildSpec1 = CSFilter(ChildSpec),
-		{error, {invalid_significant, true}} =
-		    supervisor:check_childspecs([ChildSpec1], AutoShutdown);
+		{error, {bad_combination, BadOpts}} =
+		    supervisor:check_childspecs([ChildSpec1], AutoShutdown),
+		[{restart, permanent}, {significant, true}] = lists:sort(BadOpts);
 	    ({AutoShutdown, ChildSpec = #{restart := permanent, significant := true}}) ->
 		ChildSpec1 = CSFilter(ChildSpec),
-		{error, {invalid_significant, true}} =
-		    supervisor:check_childspecs([ChildSpec1], AutoShutdown);
+		{error, {bad_combination, BadOpts}} =
+		    supervisor:check_childspecs([ChildSpec1], AutoShutdown),
+		[{restart, permanent}, {significant, true}] = lists:sort(BadOpts);
 	    ({AutoShutdown, ChildSpec}) ->
 		ChildSpec1 = CSFilter(ChildSpec),
 		ok = supervisor:check_childspecs([ChildSpec1], AutoShutdown)
@@ -836,7 +841,7 @@ child_specs_map(Config) when is_list(Config) ->
 	    ||
 		AutoShutdown <- [undefined, never, any_significant, all_significant],
 		Restart <- [undefined, permanent, transient, temporary],
-		Shutdown <- [undefined, 1000, infinity, brutal_kill],
+		Shutdown <- [undefined, 0, 1000, infinity, brutal_kill],
 		Type <- [undefined, supervisor, worker],
 		Modules <- [undefined, dynamic, [], [m], [m1, m2]],
 		Significant <- [undefined, true, false],
@@ -861,7 +866,7 @@ child_specs_map(Config) when is_list(Config) ->
 	start_link({ok, {{simple_one_for_one, 2, 3600}, [CS0,CS0]}}),
 
     %% auto_shutdown => never should not accept significant children
-    {error, {start_spec, {invalid_significant, true}}} =
+    {error, {start_spec, {bad_combination, _}}} =
 	start_link({ok, {#{auto_shutdown => never}, [CS0#{significant => true}]}}),
 
     ok.
@@ -3310,7 +3315,7 @@ significant_upgrade_never_any(_Config) ->
 	       restart => transient,
 	       significant => true},
     {ok, Sup1} = start_link({ok, {#{auto_shutdown => never}, []}}),
-    {error, {invalid_significant, true}} = supervisor:start_child(Sup1, Child1),
+    {error, {bad_combination, _}} = supervisor:start_child(Sup1, Child1),
     S1 = sys:get_state(Sup1),
     ok = fake_upgrade(Sup1, {ok, {#{auto_shutdown => any_significant}, []}}),
     S2 = sys:get_state(Sup1),
@@ -3343,7 +3348,7 @@ significant_upgrade_any_never(_Config) ->
     true = (S1 /= S2),
     error = check_exit([ChildPid1], 1000),
     error = check_exit([Sup1], 1000),
-    {error, {invalid_significant, true}} = supervisor:start_child(Sup1, Child2),
+    {error, {bad_combination, _}} = supervisor:start_child(Sup1, Child2),
     terminate(ChildPid1, normal),
     ok = check_exit([ChildPid1]),
     error = check_exit([Sup1], 1000),
@@ -3365,7 +3370,7 @@ significant_upgrade_never_all(_Config) ->
 	       restart => transient,
 	       significant => true},
     {ok, Sup1} = start_link({ok, {#{auto_shutdown => never}, []}}),
-    {error, {invalid_significant, true}} = supervisor:start_child(Sup1, Child1),
+    {error, {bad_combination, _}} = supervisor:start_child(Sup1, Child1),
     S1 = sys:get_state(Sup1),
     ok = fake_upgrade(Sup1, {ok, {#{auto_shutdown => all_significant}, []}}),
     S2 = sys:get_state(Sup1),
@@ -3402,7 +3407,7 @@ significant_upgrade_all_never(_Config) ->
     true = (S1 /= S2),
     error = check_exit([ChildPid1], 1000),
     error = check_exit([Sup1], 1000),
-    {error, {invalid_significant, true}} = supervisor:start_child(Sup1, Child2),
+    {error, {bad_combination, _}} = supervisor:start_child(Sup1, Child2),
     terminate(ChildPid1, normal),
     ok = check_exit([ChildPid1]),
     error = check_exit([Sup1], 1000),

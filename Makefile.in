@@ -744,6 +744,8 @@ tertiary_bootstrap_copy:
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test/include ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/runtime_tools ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/runtime_tools ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/runtime_tools/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/runtime_tools/include ; fi
+	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/public_key ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/public_key ; fi
+	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/public_key/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/public_key/include ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/erl_interface ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/erl_interface ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/erl_interface/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/erl_interface/include ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/jinterface/ ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/jinterface/ ; fi
@@ -820,6 +822,17 @@ tertiary_bootstrap_copy:
 			${INSTALL_DATA} -p $$x $$TF; \
 		true; \
 	done
+#	copy public_key includes to be able to compile with include_lib
+	$(V_at)for x in lib/public_key/include/*.hrl; do \
+		BN=`basename $$x`; \
+		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/public_key/include/$$BN; \
+		test -f  $$TF && \
+		test '!' -z "`find $$x -newer $$TF -print`" && \
+			${INSTALL_DATA} -p $$x $$TF; \
+		test '!' -f $$TF && \
+			${INSTALL_DATA} -p $$x $$TF; \
+		true; \
+	done
 #	copy erl_interface includes
 	$(V_at)for x in lib/erl_interface/include/*.h; do \
 		BN=`basename $$x`; \
@@ -832,7 +845,8 @@ tertiary_bootstrap_copy:
 		true; \
 	done
 #	copy jinterface priv directory
-	$(V_at)for x in lib/jinterface/priv/OtpErlang.jar; do \
+	$(V_at)if test -d lib/jinterface/priv; then \
+	    for x in lib/jinterface/priv/OtpErlang.jar; do \
 		BN=`basename $$x`; \
 		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/jinterface/priv/$$BN; \
 		test -f  $$TF && \
@@ -841,8 +855,8 @@ tertiary_bootstrap_copy:
 		test '!' -f $$TF && \
 			${INSTALL_DATA} -p $$x $$TF; \
 		true; \
-	done
-	$(V_at)for x in lib/jinterface/priv/com/ericsson/otp/erlang/*; do \
+	    done; \
+	    for x in lib/jinterface/priv/com/ericsson/otp/erlang/*; do \
 		BN=`basename $$x`; \
 		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/jinterface/priv/com/ericsson/otp/erlang/$$BN; \
 		test -f  $$TF && \
@@ -851,7 +865,8 @@ tertiary_bootstrap_copy:
 		test '!' -f $$TF && \
 			${INSTALL_DATA} -p $$x $$TF; \
 		true; \
-	done
+	    done; \
+        fi
 #	$(V_at)${INSTALL_DATA} -p lib/syntax_tools/ebin/*.beam $(BOOTSTRAP_ROOT)/bootstrap/lib/syntax_tools/ebin
 
 doc_bootstrap_build:
@@ -1037,8 +1052,8 @@ primary_bootstrap_mkdirs:
 
 primary_bootstrap_copy:
 	$(make_verbose)
-	$(V_at)${INSTALL_DATA} -p -f lib/kernel/include/*.hrl $(BOOTSTRAP_TOP)/lib/kernel/include
-	$(V_at)${INSTALL_DATA} -p -f lib/stdlib/include/*.hrl $(BOOTSTRAP_TOP)/lib/stdlib/include
+	$(V_at)${INSTALL_DATA} -p lib/kernel/include/*.hrl $(BOOTSTRAP_TOP)/lib/kernel/include
+	$(V_at)${INSTALL_DATA} -p lib/stdlib/include/*.hrl $(BOOTSTRAP_TOP)/lib/stdlib/include
 
 # To remove modules left by the bootstrap building, but leave (restore)
 # the modules in kernel which are needed for an emulator build

@@ -33,6 +33,120 @@
     <file>notes.xml</file>
     </header>
 
+<section><title>Common_Test 1.20.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Common_Test 1.20.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The option <c>release_shell</c> could crash when used
+	    together with the <c>spec</c> option.</p>
+          <p>
+	    Own Id: OTP-16940 Aux Id: ERL-1335 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>The experimental HiPE application has been removed,
+	    together with all related functionality in other
+	    applications.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16963</p>
+        </item>
+        <item>
+          <p>
+	    Fixed warnings in code matching on underscore prefixed
+	    variables.</p>
+          <p>
+	    Own Id: OTP-17385 Aux Id: OTP-17123 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Common_Test 1.20.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Common_Test 1.20.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Before this change Config leaked between test groups in
+	    case of a subgroup was skipped (GH-3480).</p>
+          <p>
+	    Own Id: OTP-17347 Aux Id: GH-3480,ERL-1439 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Common_Test 1.20.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A race condition could cause ct_netconfc:open/* to return
+	    a disfunctional handle, resulting in errors when invoking
+	    other api functions on it, and making it impossible to
+	    establish a new connection to the server in question.
+	    Similar symptoms were possible with open/* in modules
+	    ct_ssh and ct_telnet.</p>
+          <p>
+	    Internal messages from common_test processes could be
+	    left in the caller's message queue after a timeout when
+	    invoking call/* in modules ct_netconfc and ct_ssh. An
+	    internal process used by module ct_telnet could leak
+	    memory due to stray messages.</p>
+          <p>
+	    Calls to ct_telnet:open/* and ct_telnet:get_data/1 could
+	    hang indefinitely if the TCP connection to the server was
+	    lost.</p>
+          <p>
+	    Own Id: OTP-17328 Aux Id: ERIERL-631 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Common_Test 1.20</title>
 
     <section><title>Improvements and New Features</title>
@@ -95,6 +209,21 @@
 	    marker="crypto:new_api#the-new-api">substitutions</seeguide>.</p>
           <p>
 	    Own Id: OTP-16346</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Common_Test 1.18.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
         </item>
       </list>
     </section>

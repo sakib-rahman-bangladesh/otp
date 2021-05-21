@@ -676,7 +676,7 @@
         <item>
           <p>Relative multiblock carrier move threshold (in percent). When
             a block located in a multiblock carrier is shrunk,
-            the block is moved if the ratio of the size of the returned
+            the block is moved if the ratio of the size of the freed
             memory compared to the previous size is more than this threshold,
             otherwise the block is shrunk at the current location.</p>
         </item>
@@ -718,9 +718,7 @@
         <tag><marker id="M_t"/><c><![CDATA[+M<S>t true|false]]></c></tag>
         <item>
           <p>Multiple, thread-specific instances of the allocator.
-            This option has only effect on the runtime system
-            with SMP support. Default behavior on the runtime system with
-            SMP support is <c>NoSchedulers+1</c> instances. Each scheduler
+            Default behavior is <c>NoSchedulers+1</c> instances. Each scheduler
             uses a lock-free instance of its own and other threads use
             a common instance.</p>
           <p>Before ERTS 5.9 it was possible to configure

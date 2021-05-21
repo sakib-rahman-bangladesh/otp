@@ -47,7 +47,7 @@
 -export([is_process_executing_dirty/1]).
 -export([dirty_process_handle_signals/1]).
 
--export([release_literal_area_switch/0, wait_release_literal_area_switch/1]).
+-export([wait_release_literal_area_switch/1]).
 
 -export([purge_module/2]).
 
@@ -255,7 +255,7 @@ port_info(_Result, _Item) ->
     erlang:nif_error(undefined).
 
 -spec request_system_task(Pid, Prio, Request) -> 'ok' when
-      Prio :: 'max' | 'high' | 'normal' | 'low',
+      Prio :: 'max' | 'high' | 'normal' | 'low' | 'inherit',
       Type :: 'major' | 'minor',
       Request :: {'garbage_collect', term(), Type}
 	       | {'check_process_code', term(), module()}
@@ -297,10 +297,8 @@ check_process_code(Pid, Module, OptionList)  ->
     Async = get_cpc_opts(OptionList, sync),
     case Async of
 	{async, ReqId} ->
-	    {priority, Prio} = erlang:process_info(erlang:self(),
-						   priority),
 	    erts_internal:request_system_task(Pid,
-					      Prio,
+					      inherit,
 					      {check_process_code,
 					       ReqId,
 					       Module}),
@@ -310,11 +308,9 @@ check_process_code(Pid, Module, OptionList)  ->
 		true ->
 		    erts_internal:check_process_code(Module);
 		false ->
-		    {priority, Prio} = erlang:process_info(erlang:self(),
-							   priority),
 		    ReqId = erlang:make_ref(),
 		    erts_internal:request_system_task(Pid,
-						      Prio,
+						      inherit,
 						      {check_process_code,
 						       ReqId,
 						       Module}),
@@ -354,11 +350,6 @@ is_process_executing_dirty(_Pid) ->
 dirty_process_handle_signals(_Pid) ->
     erlang:nif_error(undefined).
 
--spec release_literal_area_switch() -> 'true' | 'false'.
-
-release_literal_area_switch() ->
-    erlang:nif_error(undefined).
-
 -spec wait_release_literal_area_switch(WaitMsg) -> 'true' | 'false' when
       WaitMsg :: term().
 
@@ -366,7 +357,7 @@ wait_release_literal_area_switch(WaitMsg) ->
     %% release_literal_area_switch() traps to here
     %% when it needs to wait
     receive WaitMsg -> ok end,
-    erts_internal:release_literal_area_switch().
+    erts_literal_area_collector:release_area_switch().
 
 -spec purge_module(Module, Op) -> boolean() when
       Module :: module(),

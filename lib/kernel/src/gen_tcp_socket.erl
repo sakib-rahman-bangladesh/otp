@@ -21,17 +21,23 @@
 -module(gen_tcp_socket).
 -behaviour(gen_statem).
 
+-compile({no_auto_import, [monitor/1]}).
+
 %% gen_tcp
 -export([connect/4, listen/2, accept/2,
          send/2, recv/3,
+         sendfile/4,
          shutdown/2, close/1, controlling_process/2]).
 %% inet
--export([setopts/2, getopts/2,
+-export([
+         monitor/1, cancel_monitor/1,
+         setopts/2, getopts/2,
          sockname/1, peername/1,
-         getstat/2]).
+         getstat/2
+        ]).
 
 %% Utility
--export([info/1]).
+-export([info/1, which_sockets/0, which_packet_type/1, socket_to_list/1]).
 
 -ifdef(undefined).
 -export([unrecv/2]).
@@ -50,7 +56,7 @@
 %% -------------------------------------------------------------------------
 
 %% Construct a "socket" as in this module's API
--define(module_socket(Server, Socket),
+-define(MODULE_socket(Server, Socket),
         {'$inet', ?MODULE, {Server, Socket}}).
 
 %% Standard length before data header for packet,1|2|4
@@ -115,32 +121,25 @@ connect_lookup(Address, Port, Opts, Timer) ->
             opts = ConnectOpts}} ->
             %%
             %% ?DBG({Domain, BindIP}),
-            BindAddr = bind_addr(Domain, BindIP, BindPort),
+            BindAddr = bind_addr(Domain, BindIP, BindPort, Fd),
+            ExtraOpts = extra_opts(Fd),
             connect_open(
-              Addrs, Domain, ConnectOpts, StartOpts, Fd, Timer, BindAddr)
+              Addrs, Domain, ConnectOpts, StartOpts, ExtraOpts,
+              Timer, BindAddr)
     catch
         throw : {ErrRef, Reason} ->
             ?badarg_exit({error, Reason})
     end.
 
-connect_open(Addrs, Domain, ConnectOpts, Opts, Fd, Timer, BindAddr) ->
-    %% ?DBG({Addrs, Domain, ConnectOpts, Opts, Fd, Timer, BindAddr}),
+connect_open(Addrs, Domain, ConnectOpts, Opts, ExtraOpts, Timer, BindAddr) ->
+    %% ?DBG({Addrs, Domain, ConnectOpts, Opts, ExtraOpts, Timer, BindAddr}),
 
     %%
-    %% The {netns, File} option is passed in Fd by inet:connect_options/2.
+    %% The {netns, File} option is passed in Fd by inet:connect_options/2,
+    %% and then over to ExtraOpts.
     %% The {debug, Bool} option is passed in Opts since it is
     %% subversively classified as both start and socket option.
     %%
-
-    ExtraOpts =
-        if
-            Fd =:= -1      -> #{};
-            is_integer(Fd) -> #{fd => Fd};
-            %% This is an **ugly** hack.
-            %% inet:connect_options/2 has the bad taste to use this
-            %% for [{netns,NS}] if that option is used...
-            is_list(Fd)    -> #{netns => Fd}
-        end,
 
     {SocketOpts, StartOpts} = setopts_split(socket, Opts),
     %% ?DBG([{socket, SocketOpts}, {start, StartOpts}]),
@@ -163,7 +162,7 @@ connect_open(Addrs, Domain, ConnectOpts, Opts, Fd, Timer, BindAddr) ->
                 Socket =  
                     val(ErrRef,
                         connect_loop(Addrs, Server, DefaultError, Timer)),
-                {ok, ?module_socket(Server, Socket)}
+                {ok, ?MODULE_socket(Server, Socket)}
             catch
                 throw : {ErrRef, Reason} ->
                     close_server(Server),
@@ -187,10 +186,26 @@ connect_loop([Addr | Addrs], Server, _Error, Timer) ->
     end.
 
 
-bind_addr(_Domain, undefined = _BindIP, _BindPort) ->
+extra_opts(Fd) when is_integer(Fd) ->
+    if
+        Fd < 0 ->
+            #{};
+        true ->
+            #{fd => Fd}
+    end;
+extra_opts(OpenOpts) when is_list(OpenOpts) ->
+    %% This is an **ugly** hack.
+    %% inet:{connect,listen,udp,sctp}_options/2 has the bad taste
+    %% to use this for [{netns,BinNS}] if that option is used...
+   maps:from_list(OpenOpts).
+
+
+bind_addr(_Domain, BindIP, _BindPort, Fd)
+  when BindIP =:= undefined;
+       is_integer(Fd), 0 =< Fd ->
     %% Do not bind!
     undefined;
-bind_addr(Domain, BindIP, BindPort) ->
+bind_addr(Domain, BindIP, BindPort, _Fd) ->
     case Domain of
         local ->
             case BindIP of
@@ -238,10 +253,12 @@ listen(Port, Opts) ->
                     %%
                     Domain = domain(Mod),
                     %% ?DBG({Domain, BindIP}),
-                    BindAddr = bind_addr(Domain, BindIP, BindPort),
+                    BindAddr = bind_addr(Domain, BindIP, BindPort, Fd),
+                    ExtraOpts = extra_opts(Fd),
 		    %% ?DBG([{listen_opts, ListenOpts}, {backlog, Backlog}]),
                     listen_open(
-                      Domain, ListenOpts, StartOpts, Fd, Backlog, BindAddr)
+                      Domain, ListenOpts, StartOpts, ExtraOpts,
+                      Backlog, BindAddr)
             end;
         {error, _} = Error ->
             ?badarg_exit(Error)
@@ -249,25 +266,13 @@ listen(Port, Opts) ->
 
 %% Helpers -------
 
-listen_open(Domain, ListenOpts, Opts, Fd, Backlog, BindAddr) ->
+listen_open(Domain, ListenOpts, Opts, ExtraOpts, Backlog, BindAddr) ->
     %% ?DBG([{domain,      Domain},
     %%  	  {listen_opts, ListenOpts},
     %%  	  {opts,        Opts},
-    %%  	  {fd,          Fd},
+    %%  	  {extra_opts,  ExtraOpts},
     %%  	  {backlog,     Backlog},
     %%  	  {bind_addr,   BindAddr}]),
-
-    ExtraOpts =
-        if
-            Fd =:= -1      -> #{};
-            is_integer(Fd) -> #{fd => Fd};
-            %% This is an **ugly** hack.
-            %% inet:connect_options/2 has the bad taste to use this
-            %% for [{netns, NS}] if that option is used...
-            %% Which is never called here, but just to keep it the same
-            %% we use the same for listen!
-            is_list(Fd)    -> #{netns => Fd}
-        end,
 
     {SocketOpts, StartOpts0} = setopts_split(socket, Opts),
     %% ?DBG([{socket_opts, SocketOpts}, {start_opts0, StartOpts0}]),
@@ -290,7 +295,7 @@ listen_open(Domain, ListenOpts, Opts, Fd, Backlog, BindAddr) ->
                       [{start_opts, StartOpts}] ++ SocketOpts ++ Setopts})),
                 ok(ErrRef, call_bind(Server, BindAddr)),
                 Socket = val(ErrRef, call(Server, {listen, Backlog})),
-                {ok, ?module_socket(Server, Socket)}
+                {ok, ?MODULE_socket(Server, Socket)}
             catch
                 throw : {ErrRef, Reason} ->
                     close_server(Server),
@@ -304,7 +309,7 @@ listen_open(Domain, ListenOpts, Opts, Fd, Backlog, BindAddr) ->
 
 %% -------------------------------------------------------------------------
 
-accept(?module_socket(ListenServer, ListenSocket), Timeout) ->
+accept(?MODULE_socket(ListenServer, ListenSocket), Timeout) ->
     %%
     Timer = inet:start_timer(Timeout),
     ErrRef = make_ref(),
@@ -319,7 +324,7 @@ accept(?module_socket(ListenServer, ListenSocket), Timeout) ->
         Socket =
             val({ErrRef, Server},
                 call(Server, {accept, ListenSocket, inet:timeout(Timer)})),
-        {ok, ?module_socket(Server, Socket)}
+        {ok, ?MODULE_socket(Server, Socket)}
     catch
         throw : {{ErrRef, Srv}, Reason} ->
             stop_server(Srv),
@@ -332,7 +337,7 @@ accept(?module_socket(ListenServer, ListenSocket), Timeout) ->
 
 %% -------------------------------------------------------------------------
 
-send(?module_socket(Server, Socket), Data) ->
+send(?MODULE_socket(Server, Socket), Data) ->
     case socket:getopt(Socket, {otp,meta}) of
         {ok,
          #{packet := Packet,
@@ -400,13 +405,49 @@ send_result(Server, Meta, Result) ->
     end.
 
 %% -------------------------------------------------------------------------
+%% Handler called by file:sendfile/5 to handle ?MODULE_socket()s
+%% as a sibling of prim_file:sendfile/8
 
-recv(?module_socket(Server, _Socket), Length, Timeout) ->
+sendfile(
+  ?MODULE_socket(_Server, Socket),
+  FileHandle, Offset, Count) ->
+    %%
+    case socket:getopt(Socket, {otp,meta}) of
+        {ok, #{packet := _}} ->
+            try
+                %% XXX should we do cork/uncork here, like in prim_inet?
+                %%     And, maybe file:advise too, like prim_file
+                socket:sendfile(Socket, FileHandle, Offset, Count, infinity)
+            catch
+                Class : Reason : Stacktrace
+                  when Class =:= error, Reason =:= badarg ->
+                    %% Convert badarg exception into return value
+                    %% to look like file:sendfile
+                    case Stacktrace of
+                        [{socket, sendfile, Args, _} | _]
+                          when Args =:= 5;                        % Arity 5
+                               tl(tl(tl(tl(tl(Args))))) =:= [] -> % Arity 5
+                            {Class, Reason};
+                        _ ->
+                            erlang:raise(Class, Reason, Stacktrace)
+                    end;
+                Class : notsup when Class =:= error ->
+                    {Class, enotsup}
+            end;
+        {ok, _BadMeta} ->
+            {error, badarg};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% -------------------------------------------------------------------------
+
+recv(?MODULE_socket(Server, _Socket), Length, Timeout) ->
     ?badarg_exit(call(Server, {recv, Length, Timeout})).
 
 %% -------------------------------------------------------------------------
 
-shutdown(?module_socket(Server, _Socket), How) ->
+shutdown(?MODULE_socket(Server, _Socket), How) ->
     %% ?DBG({shutdown, How}),
     Result = call(Server, {shutdown, How}),
     %% ?DBG({shutdown_result, Result}),
@@ -414,7 +455,7 @@ shutdown(?module_socket(Server, _Socket), How) ->
 
 %% -------------------------------------------------------------------------
 
-close(?module_socket(Server, _Socket)) ->
+close(?MODULE_socket(Server, _Socket)) ->
     ?badarg_exit(close_server(Server)).
 
 %% Helpers -------
@@ -426,7 +467,7 @@ close_server(Server) ->
 
 %% -------------------------------------------------------------------------
 
-controlling_process(?module_socket(Server, _Socket) = S, NewOwner)
+controlling_process(?MODULE_socket(Server, _Socket) = S, NewOwner)
   when is_pid(NewOwner) ->
     case call(Server, {controlling_process, NewOwner}) of
         ok -> ok;
@@ -453,21 +494,42 @@ controlling_process(S, NewOwner, Server, Msg) ->
     NewOwner ! Msg,
     controlling_process(S, NewOwner, Server).
 
+
 %% -------------------------------------------------------------------------
 %% Module inet backends
 %% -------------------------------------------------------------------------
 
-setopts(?module_socket(Server, _Socket), Opts) when is_list(Opts) ->
-    call(Server, {setopts, Opts}).
+monitor(?MODULE_socket(_Server, ESock) = Socket) ->
+    %% The socket that is part of the down message:
+    case socket_registry:monitor(ESock, #{msocket => Socket}) of
+	{error, Reason} ->
+	    erlang:error({invalid, Reason});
+	MRef when is_reference(MRef) ->
+	    MRef
+    end;
+monitor(Socket) ->
+    erlang:error(badarg, [Socket]).
+
+cancel_monitor(MRef) when is_reference(MRef) ->
+    socket:cancel_monitor(MRef);
+cancel_monitor(MRef) ->
+    erlang:error(badarg, [MRef]).
+
 
 %% -------------------------------------------------------------------------
 
-getopts(?module_socket(Server, _Socket), Opts) when is_list(Opts) ->
+setopts(?MODULE_socket(Server, _Socket), Opts) when is_list(Opts) ->
+    call(Server, {setopts, Opts}).
+
+
+%% -------------------------------------------------------------------------
+
+getopts(?MODULE_socket(Server, _Socket), Opts) when is_list(Opts) ->
     call(Server, {getopts, Opts}).
 
 %% -------------------------------------------------------------------------
 
-sockname(?module_socket(_Server, Socket)) ->
+sockname(?MODULE_socket(_Server, Socket)) ->
     case socket:sockname(Socket) of
         {ok, SockAddr} -> {ok, address(SockAddr)};
         {error, _} = Error -> Error
@@ -475,7 +537,7 @@ sockname(?module_socket(_Server, Socket)) ->
 
 %% -------------------------------------------------------------------------
 
-peername(?module_socket(_Server, Socket)) ->
+peername(?MODULE_socket(_Server, Socket)) ->
     case socket:peername(Socket) of
         {ok, SockAddr} -> {ok, address(SockAddr)};
         {error, _} = Error -> Error
@@ -483,16 +545,61 @@ peername(?module_socket(_Server, Socket)) ->
 
 %% -------------------------------------------------------------------------
 
-getstat(?module_socket(Server, _Socket), What) when is_list(What) ->
+getstat(?MODULE_socket(Server, _Socket), What) when is_list(What) ->
     call(Server, {getstat, What}).
 
 
 %% -------------------------------------------------------------------------
 
-info(?module_socket(Server, _Socket)) ->
+info(?MODULE_socket(Server, _Socket)) ->
     call(Server, info).
 
 
+%% -------------------------------------------------------------------------
+
+socket_to_list(?MODULE_socket(_Server, Socket)) ->
+    "#Socket" ++ Id = socket:to_list(Socket),
+    "#InetSocket" ++ Id;
+socket_to_list(Socket) ->
+    erlang:error(badarg, [Socket]).
+
+
+which_sockets() ->
+    which_sockets(socket:which_sockets(tcp)).
+
+which_sockets(Socks) ->
+    which_sockets(Socks, []).
+
+which_sockets([], Acc) ->
+    Acc;
+which_sockets([Sock|Socks], Acc) ->
+    case socket:getopt(Sock, {otp, meta}) of
+	{ok, undefined} ->
+	    which_sockets(Socks, Acc);
+	{ok, _Meta} ->
+	    %% One of ours - try to recreate the compat socket
+	    %% Currently we don't have the 'owner' in meta, so we need to look
+	    %% it up...
+	    #{owner := Owner} = socket:info(Sock),
+	    MSock = ?MODULE_socket(Owner, Sock),
+	    which_sockets(Socks, [MSock|Acc]);
+	_ ->
+	    which_sockets(Socks, Acc)
+    end.
+
+
+%% -------------------------------------------------------------------------
+
+which_packet_type(?MODULE_socket(_Server, Socket)) ->
+    %% quick and dirty...
+    case socket:getopt(Socket, {otp, meta}) of
+	{ok, #{packet := Type}} ->
+	    {ok, Type};
+	_ ->
+	    error
+    end.
+
+			 
 %%% ========================================================================
 %%% Socket glue code
 %%%
@@ -1064,22 +1171,19 @@ init(Arg) ->
     error(badarg, [Arg]).
 
 
-socket_open(Domain, Proto, #{fd := FD} = _ExtraOpts, Extra)
-  when is_integer(FD) andalso (FD > 0) ->
-    Opts = Extra#{dup      => false,
-                  domain   => Domain,
-                  type     => stream,
-                  protocol => Proto},
+socket_open(Domain, Proto, #{fd := FD} = ExtraOpts, Extra) ->
+    Opts =
+        (maps:merge(Extra, maps:remove(fd, ExtraOpts)))
+        #{dup      => false,
+          domain   => Domain,
+          type     => stream,
+          protocol => Proto},
     %% ?DBG([{fd, FD}, {opts, Opts}]),
     socket:open(FD, Opts);
-socket_open(Domain, Proto, #{netns := NS} = ExtraOpts, Extra)
-  when is_list(NS) ->
+socket_open(Domain, Proto, ExtraOpts, Extra) ->
     Opts = maps:merge(Extra, ExtraOpts),
     %% ?DBG([{netns, NS}, {opts, Opts}]),
-    socket:open(Domain, stream, Proto, Opts);
-socket_open(Domain, Proto, _ExtraOpts, Extra) ->
-    %% ?DBG([{opts, Extra}]),
-    socket:open(Domain, stream, Proto, Extra).
+    socket:open(Domain, stream, Proto, Opts).
 
 
 terminate(_Reason, State, {_P, _} = P_D) ->
@@ -1127,7 +1231,7 @@ terminate(State, {#params{socket = Socket} = P, D}) ->
 
 %% Construct a "socket" as in this module's API
 module_socket(#params{socket = Socket}) ->
-    ?module_socket(self(), Socket).
+    ?MODULE_socket(self(), Socket).
 
 %% -------------------------------------------------------------------------
 %% Event Handler (callback)
@@ -1213,8 +1317,8 @@ handle_event(
   #controlling_process{owner = NewOwner, state = State},
   {#params{owner = Owner, owner_mon = OwnerMon} = P, D}) ->
     %%
-    NewOwnerMon = monitor(process, NewOwner),
-    true = demonitor(OwnerMon, [flush]),
+    NewOwnerMon = erlang:monitor(process, NewOwner),
+    true = erlang:demonitor(OwnerMon, [flush]),
     {next_state, State,
      {P#params{owner = NewOwner, owner_mon = NewOwnerMon}, D},
      [{reply, From, ok}]};
@@ -1259,7 +1363,7 @@ handle_event({call, From}, {getopts, Opts}, State, {P, D}) ->
 
 %% Call: setopts/1
 handle_event({call, From}, {setopts, Opts}, State, {P, D}) ->
-    %% ?DBG([{opts, Opts}, {state, State}, {d, D}]),
+    %% ?DBG([{setopts, Opts}, {state, State}, {d, D}]),
     {Result, D_1} = state_setopts(P, D, State, Opts),
     %% ?DBG([{result, Result}, {d1, D_1}]),
     case Result of
@@ -1304,7 +1408,7 @@ handle_event({call, From}, info, State, {P, D}) ->
             {keep_state_and_data,
              [{reply, From, #{}}]};
         _ ->
-            {D_1, Result} = handle_info(P#params.socket, D),
+            {D_1, Result} = handle_info(P#params.socket, P#params.owner, D),
             {keep_state, {P, D_1},
              [{reply, From, Result}]}
     end;
@@ -1599,7 +1703,7 @@ handle_connect(
               P, D#{type => connect},
               [{{timeout, connect}, cancel},
                {reply, From, {ok, Socket}}]);
-        {select, SelectInfo} ->
+        {select, ?select_info(_) = SelectInfo} ->
             {next_state,
              #connect{info = SelectInfo, from = From, addr = Addr},
              {P, D#{type => connect}},
@@ -1624,7 +1728,7 @@ handle_accept(P, D, From, ListenSocket, Timeout) ->
               P#params{socket = Socket}, D#{type => accept},
               [{{timeout, accept}, cancel},
                {reply, From, {ok, Socket}}]);
-        {select, SelectInfo} ->
+        {select, ?select_info(_) = SelectInfo} ->
             %% ?DBG({accept_select, SelectInfo}),
             {next_state,
              #accept{
@@ -1718,14 +1822,16 @@ handle_recv_peek(P, D, ActionsR, Packet) ->
                     handle_recv_peek(
                       P, D, ActionsR, Packet,
                       <<ShortData/binary, FinalData/binary>>);
-                {ok, {_, SelectInfo}} ->
+                {select, Select} ->
                     {next_state,
-                     #recv{info = SelectInfo},
-                     {P, D},
-                     reverse(ActionsR)};
-                {select, SelectInfo} ->
-                    {next_state,
-                     #recv{info = SelectInfo},
+                     #recv{
+                        info =
+                            case Select of
+                                {?select_info(_) = SelectInfo, _Data} ->
+                                    SelectInfo;
+                                ?select_info(_) = SelectInfo ->
+                                    SelectInfo
+                            end},
                      {P, D},
                      reverse(ActionsR)};
                 {error, {Reason, <<_Data/binary>>}} ->
@@ -1770,13 +1876,13 @@ handle_recv_length(P, D, ActionsR, Length, Buffer) when 0 < Length ->
             handle_recv_deliver(
               P, D#{buffer := <<>>}, ActionsR,
               condense_buffer([Data | Buffer]));
-        {ok, {Data, SelectInfo}} ->
+        {select, {?select_info(_) = SelectInfo, Data}} ->
             N = Length - byte_size(Data),
             {next_state,
              #recv{info = SelectInfo},
              {P, D#{buffer := [Data | Buffer], recv_length := N}},
              reverse(ActionsR)};
-        {select, SelectInfo} ->
+        {select, ?select_info(_) = SelectInfo} ->
             {next_state,
              #recv{info = SelectInfo},
              {P, D#{buffer := Buffer}},
@@ -1803,7 +1909,7 @@ handle_recv_length(P, D, ActionsR, _0, Buffer) ->
                 {ok, <<Data/binary>>} ->
 		    %% ?DBG({'got some', byte_size(Data)}),
                     handle_recv_deliver(P, D, ActionsR, Data);
-                {ok, {Data, SelectInfo}} ->
+                {select, {?select_info(_) = SelectInfo, Data}} ->
 		    %% ?DBG({'got another select with data', byte_size(Data)}),
                     case socket:cancel(Socket, SelectInfo) of
                         ok ->
@@ -1811,7 +1917,7 @@ handle_recv_length(P, D, ActionsR, _0, Buffer) ->
                         {error, Reason} ->
                             handle_recv_error(P, D, ActionsR, Reason, Data)
                     end;
-                {select, SelectInfo} ->
+                {select, ?select_info(_) = SelectInfo} ->
 		    %% ?DBG({'got another select', SelectInfo}),
                     {next_state,
                      #recv{info = SelectInfo},
@@ -1907,7 +2013,7 @@ handle_recv_more(P, D, ActionsR, BufferedData) ->
 	    %% ?DBG([{more_data_sz, byte_size(MoreData)}]), 
 	    Data = catbin(BufferedData, MoreData),
             handle_recv_decode(P, D, ActionsR, Data);
-        {select, SelectInfo} ->
+        {select, ?select_info(_) = SelectInfo} ->
 	    %% ?DBG([{select_info, SelectInfo}]), 
             {next_state,
              #recv{info = SelectInfo},
@@ -2348,7 +2454,7 @@ state_getopts(P, D, State, [Tag | Tags], Acc) ->
             {error, einval}
     end.
 
-handle_info(Socket, D) -> 
+handle_info(Socket, Owner, D) -> 
     %% Read counters
     Counters_1 = socket_info_counters(Socket),
     %% Check for recent wraps
@@ -2362,7 +2468,7 @@ handle_info(Socket, D) ->
     Counters_3 = maps:merge(Counters_1, maps:with(Wrapped, Counters_2)),
     %% Go ahead with wrap updated counters
     Counters_4 = maps:from_list(getstat_what(D_1, Counters_3)),
-    {D_1, Info#{counters => Counters_4}}.
+    {D_1, Info#{counters => Counters_4, owner => Owner}}.
     
 getstat(Socket, D, What) ->
     %% Read counters
