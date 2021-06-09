@@ -134,9 +134,9 @@
 %%
 %% It is configurable where the start file is located, and what it
 %% is called.
-%%   The paramater is {sasl, start_prg} = File
+%%   The parameter is {sasl, start_prg} = File
 %% It is also configurable where the releases directory is located.
-%% Default is $ROOT/releases.  $RELDIR overrids, and
+%% Default is $ROOT/releases.  $RELDIR overrides, and
 %% {sasl, releases_dir} overrides both.
 %%-----------------------------------------------------------------
 start_link() ->
